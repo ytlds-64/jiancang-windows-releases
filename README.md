@@ -1,12 +1,12 @@
 # 见藏 Windows
 
-当前源码版本为 **0.36.50**。
+当前源码版本为 **0.36.51**。
 
 - [最新正式版和更新记录](https://github.com/ytlds-64/jiancang-windows-releases/releases/latest)
-- [下载 Windows x64 安装包](https://github.com/ytlds-64/jiancang-windows-releases/releases/download/tauri-windows-x64/JianCang-Windows-0.36.50-x64-Setup.exe)
-- [下载 0.36.50 源码 ZIP](https://github.com/ytlds-64/jiancang-windows-releases/releases/download/tauri-windows-x64/JianCang-Windows-0.36.50-Source.zip)
+- [下载 Windows x64 安装包](https://github.com/ytlds-64/jiancang-windows-releases/releases/download/tauri-windows-x64/JianCang-Windows-0.36.51-x64-Setup.exe)
+- [下载 0.36.51 源码 ZIP](https://github.com/ytlds-64/jiancang-windows-releases/releases/download/tauri-windows-x64/JianCang-Windows-0.36.51-Source.zip)
 
-## 0.36.50 源码
+## 0.36.51 源码
 
 此归档包含 Windows x64 WebView2 版的 Tauri 2 桌面端、共用界面和 Node.js 素材服务、Edge / Chrome 采集插件 1.4.1、构建与安装打包脚本和自动化测试。
 

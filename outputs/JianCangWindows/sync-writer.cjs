@@ -1,10 +1,12 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const { execFile } = require('node:child_process');
+const { hostname } = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
-const { readWriteState, validateWriteOperation, conflictChoice, confirmDeletionConflict, historyField } = require('./sync-library.cjs');
+const { readWriteState, validateWriteOperation, conflictChoice, confirmDeletionConflict, historyField, syncDeviceMetadata } = require('./sync-library.cjs');
 const { openContainedFile } = require('./original-file.cjs');
 const { webURL } = require('./local-workflow.cjs');
 const { tagChangePlan } = require('./tag-actions.cjs');
@@ -13,6 +15,7 @@ const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const journalFile = /^[1-9]\d*-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/i;
 const stagingFile = /^sync-original-[0-9a-f-]{36}\.part$/i;
 const maximumBatch = 10_000;
+const maximumConflictBatch = 80;
 const maximumHistoryGroups = 30;
 const maximumHistoryBytes = 2 * 1024 ** 2;
 const maximumHistoryAliasBytes = 16 * 1024 ** 2;
@@ -34,6 +37,27 @@ const media = new Map(Object.entries({
   audio: 'mp3 m4a wav aiff aif ogg flac aac ape opus wma mid midi', pdf: 'pdf', link: 'url webloc website webpage',
 }).flatMap(([kind, extensions]) => extensions.split(' ').map(ext => [ext, kind])));
 const assetKinds = new Set([...media.values(), 'document']);
+
+let windowsDevice;
+function currentWindowsDevice() {
+  if (process.platform !== 'win32') return undefined;
+  if (windowsDevice) return windowsDevice;
+  let name = process.env.COMPUTERNAME;
+  if (!name) {
+    try { name = hostname().split('.')[0]; } catch { /* The OS may not have a configured name. */ }
+  }
+  windowsDevice = syncDeviceMetadata({ platform: 'windows', name });
+  const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+  const bios = 'HKLM\\HARDWARE\\DESCRIPTION\\System\\BIOS';
+  execFile(executable, ['query', bios, '/v', 'SystemProductName'], { windowsHide: true, timeout: 1_500 }, (error, stdout) => {
+    if (error) return;
+    const model = /\bSystemProductName[ \t]+REG_SZ[ \t]+([^\r\n]+)/i.exec(stdout)?.[1]?.trim();
+    if (!model || /^(?:system product name|default string|to be filled by o\.e\.m\.)$/i.test(model)) return;
+    const details = syncDeviceMetadata({ platform: 'windows', model });
+    if (details.model) windowsDevice.model = details.model;
+  });
+  return windowsDevice;
+}
 
 function text(value, limit, multiline = false) {
   if (typeof value !== 'string') throw new Error('请输入有效文字。');
@@ -449,16 +473,27 @@ function queueError(error) {
   return error.code && !String(error.code).startsWith('SYNC_') ? '同步暂未完成，请在素材库中重试。' : error.message;
 }
 
+function conflictFailure(command, error) {
+  return { signature: typeof command?.signature === 'string' ? command.signature : null, status: 'failed',
+    message: queueError(error) || '这条冲突暂未处理，请重试。',
+    ...(String(error.code).startsWith('SYNC_') && { code: error.code }) };
+}
+
+function changesCollectionStructure(command) {
+  return command.kind === 'collection' && ['name', 'parentID'].includes(command.field);
+}
+
 class DirectorySyncWriter {
   #db;
   #tail = Promise.resolve();
 
-  constructor({ directory, publishOriginal, onChange } = {}) {
+  constructor({ directory, publishOriginal, onChange, device } = {}) {
     if (!path.isAbsolute(directory ?? '')) throw new TypeError('A private sync journal directory is required.');
     this.directory = directory;
     this.staging = path.join(directory, 'staging');
     this.publishOriginal = publishOriginal;
     this.onChange = onChange;
+    this.device = device ? syncDeviceMetadata(device) : currentWindowsDevice();
   }
 
   async initialize() {
@@ -613,7 +648,8 @@ class DirectorySyncWriter {
     const operations = changes.map(change => {
       const operation = { version: 1, id: change.operationId ?? randomUUID(), libraryID: producer.library_id,
         deviceID: producer.device_id, counter: ++counter, clock: { ...clock, [producer.device_id]: counter },
-        entityKind: change.kind, entityID: change.id, changes: change.changes, ...(change.asset && { asset: change.asset }) };
+        entityKind: change.kind, entityID: change.id, changes: change.changes,
+        ...(change.asset && { asset: change.asset }), ...(this.device && { device: this.device }) };
       validateWriteOperation(operation);
       const payload = JSON.stringify(operation);
       if (Buffer.byteLength(payload) > 2 * 1024 ** 2) throw new Error('单条同步记录过大，请减少修改内容。');
@@ -728,6 +764,92 @@ class DirectorySyncWriter {
     }
   }
 
+  #acknowledgeConflict(entry, state, command) {
+    const signature = confirmDeletionConflict(state, command);
+    return this.#db.prepare('INSERT OR IGNORE INTO acknowledged_conflicts VALUES (?, ?)')
+      .run(entry.libraryId, signature).changes;
+  }
+
+  resolveConflicts(entry, commands) {
+    return this.#run(async () => {
+      if (!Array.isArray(commands) || commands.length < 1 || commands.length > maximumConflictBatch) {
+        throw new Error(`请选择 1 到 ${maximumConflictBatch} 条同步冲突。`);
+      }
+      const results = Array(commands.length);
+      const rows = [];
+      const seen = new Set();
+      commands.forEach((command, index) => {
+        try {
+          if (typeof command?.signature !== 'string' || !/^[a-f0-9]{64}$/.test(command.signature) ||
+              !['asset', 'collection'].includes(command.kind) || typeof command.entityId !== 'string' ||
+              typeof command.field !== 'string') throw new Error('这条冲突已有新变化，请刷新后重新选择。');
+          const key = JSON.stringify([command.kind, command.entityId, command.field]);
+          if (seen.has(key)) throw new Error('同一项素材资料只能选择一个值。');
+          seen.add(key);
+          rows.push({ command: { ...command, action: 'resolveConflict' }, index });
+        } catch (error) { results[index] = conflictFailure(command, error); }
+      });
+
+      for (let start = 0; start < rows.length;) {
+        let end = start + 1;
+        // Independent fields can share one verified replay. Recheck the tree
+        // after each rename or move so two valid-looking rows cannot form a cycle or duplicate a name.
+        if (!changesCollectionStructure(rows[start].command)) {
+          while (end < rows.length && !changesCollectionStructure(rows[end].command)) end++;
+        }
+        let latest;
+        try { latest = await this.#latest(entry); }
+        catch (error) {
+          for (const { command, index } of rows.slice(start)) results[index] = conflictFailure(command, error);
+          break;
+        }
+        const settled = await this.#resolveConflictGroup(entry, latest, rows.slice(start, end), results);
+        if (!settled) {
+          const error = new Error('前面的选择已保存到本机。请提交待写入记录后再处理这一项。');
+          for (const { command, index } of rows.slice(end)) results[index] = conflictFailure(command, error);
+          break;
+        }
+        start = end;
+      }
+      return { results, ...this.status(entry.libraryId) };
+    });
+  }
+
+  async #resolveConflictGroup(entry, { state, producer }, rows, results) {
+    let acknowledged = 0;
+    const ready = [];
+    for (const { command, index } of rows) {
+      try {
+        if (command.acknowledgeDeletion === true) {
+          acknowledged += this.#acknowledgeConflict(entry, state, command);
+          results[index] = { signature: command.signature, status: 'resolved', acknowledged: true };
+        } else {
+          const { changes: [change] } = mutationFor(state, command);
+          change.operationId = randomUUID();
+          ready.push({ command, index, change });
+        }
+      } catch (error) { results[index] = conflictFailure(command, error); }
+    }
+
+    try { if (ready.length) this.#queue(producer, state, ready.map(({ change }) => change)); }
+    catch (error) {
+      for (const { command, index } of ready) results[index] = conflictFailure(command, error);
+      if (acknowledged) this.#saveStatus(entry.libraryId, null, Math.max(0, state.conflicts - acknowledged));
+      return true;
+    }
+    const published = !ready.length || await this.#drain(entry, producer, state);
+    const { error } = this.status(entry.libraryId);
+    let resolved = acknowledged;
+    ready.forEach(({ command, index, change }, offset) => {
+      const written = state.ownOperations.get(producer.counter + 1 + offset) === change.operationId;
+      if (written) resolved++;
+      results[index] = { signature: command.signature, status: written ? 'resolved' : 'pending',
+        ...(!written && { message: error || '选择已保存到本机，可在同步状态中重试提交。' }) };
+    });
+    if (resolved) this.#saveStatus(entry.libraryId, error, Math.max(0, state.conflicts - resolved));
+    return published;
+  }
+
   mutate(entry, command) {
     return this.#run(async () => {
       const { state, producer } = await this.#latest(entry);
@@ -735,10 +857,8 @@ class DirectorySyncWriter {
         return this.#replayHistory(entry, state, producer, command);
       }
       if (command?.action === 'resolveConflict' && command.acknowledgeDeletion === true) {
-        const signature = confirmDeletionConflict(state, command);
-        const saved = this.#db.prepare('INSERT OR IGNORE INTO acknowledged_conflicts VALUES (?, ?)')
-          .run(entry.libraryId, signature);
-        this.#saveStatus(entry.libraryId, null, Math.max(0, state.conflicts - saved.changes));
+        const saved = this.#acknowledgeConflict(entry, state, command);
+        this.#saveStatus(entry.libraryId, null, Math.max(0, state.conflicts - saved));
         return { acknowledged: true, ...this.status(entry.libraryId) };
       }
       const { changes, result } = mutationFor(state, command);

@@ -99,6 +99,7 @@ contextBridge.exposeInMainWorld('jiancang', {
   onCloudOriginalChange: listener => onChange('cloud-originals:changed', listener),
   listSyncConflicts: id => ipcRenderer.invoke('sync-conflicts:list', id),
   resolveSyncConflict: (id, command) => ipcRenderer.invoke('sync-conflicts:resolve', id, command),
+  resolveSyncConflicts: (id, commands) => ipcRenderer.invoke('sync-conflicts:resolve-batch', id, commands),
   createLocalLibrary: name => ipcRenderer.invoke('local:create', name),
   mutateLocalLibrary: (id, command) => ipcRenderer.invoke('local:mutate', id, command),
   chooseImport: (id, collection, type) => ipcRenderer.invoke('local-import:choose', id, collection, type),

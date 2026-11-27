@@ -2424,6 +2424,19 @@ function resolveSyncConflict(id, command) {
   });
 }
 
+function resolveSyncConflicts(id, commands) {
+  return scheduleLocalWrite(async () => {
+    const entry = syncConflictLibrary(id);
+    writableLibrary(id);
+    const result = await syncWriter.resolveConflicts(entry, commands);
+    if (result.results.some(row => row.status !== 'failed')) {
+      await catalogReads.get(id);
+      if (registeredLibrary(id) === entry) await refreshCatalog(entry, true, true);
+    }
+    return { ok: true, ...result };
+  });
+}
+
 function duplicateOriginal(reference, { allowRevisionChange = false } = {}) {
   if (typeof reference?.registrationId !== 'string' || typeof reference.assetId !== 'string') return null;
   try {
@@ -2701,6 +2714,7 @@ function handleFeatureActions() {
       syncWriterError ? undefined : syncWriter?.acknowledgedConflicts(entry.libraryId));
   });
   feature('sync-conflicts:resolve', resolveSyncConflict);
+  feature('sync-conflicts:resolve-batch', resolveSyncConflicts);
   feature('structured-export:plan', previewStructuredExport);
   feature('structured-export:choose', chooseStructuredExportDestination);
   feature('structured-export:start', startStructuredExport);

@@ -538,6 +538,14 @@ class LibraryService {
     return { ok: true, ...result, state: this.state() };
   }
 
+  async resolveSyncConflicts(id, commands) {
+    const entry = this.syncEntry(id);
+    this.writable(id);
+    const result = await this.syncWriter.resolveConflicts(entry, commands);
+    if (result.results.some(row => row.status !== 'failed')) await this.refreshEntry(entry);
+    return { ok: true, ...result, state: this.state() };
+  }
+
   async eagleWritable(id) {
     const entry = this.entry(id);
     if (entry.kind !== 'eagle' || !entry.eagleWritable) throw new Error('请先为这份 Eagle 库开启双向同步。');
@@ -970,6 +978,7 @@ class LibraryService {
         return listSyncConflicts(entry.root, entry.libraryId, this.syncWriter?.acknowledgedConflicts(entry.libraryId));
       }
       case 'sync-conflicts:resolve': return this.serial(() => this.resolveSyncConflict(...args));
+      case 'sync-conflicts:resolve-batch': return this.serial(() => this.resolveSyncConflicts(...args));
       case 'local:create': return this.serial(() => this.create(...args));
       case 'local:mutate': return this.serial(() => this.mutate(...args));
       case 'local-import:choose': return this.serial(() => this.enqueue(...args));

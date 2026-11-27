@@ -258,6 +258,85 @@ function resolve(conflict, choiceId) {
   return { action: 'resolveConflict', kind, entityId, field, signature, choiceId };
 }
 
+test('a batch writes independent conflict choices while leaving stale and duplicate rows untouched', async t => {
+  const { entry, profile } = await setup(t);
+  await remote(entry, appleDevice, 1, mobileBirth, {}, true);
+  await remote(entry, appleDevice, 2, { note: wrap('string', '手机备注'), rating: wrap('int', 2),
+    'tag:摄影': wrap('bool', true) });
+  const alternative = await remote(entry, otherDevice, 1, { note: wrap('string', '另一条备注'), rating: wrap('int', 4),
+    'tag:摄影': wrap('bool', false) }, { [appleDevice]: 1 });
+  const { conflicts } = await listSyncConflicts(entry.root, entry.libraryId);
+  const [note, rating, tag] = ['note', 'rating', 'tag:摄影'].map(field => conflicts.find(item => item.field === field));
+  await remote(entry, appleDevice, 3, { note: wrap('string', '刚修改的手机备注') });
+  const writer = new DirectorySyncWriter({ directory: profile });
+  await writer.initialize();
+  t.after(() => writer.close());
+  const outcomes = await writer.resolveConflicts(entry, [resolve(note, alternative.id), resolve(rating, alternative.id),
+    resolve(tag, tag.winnerId), resolve(rating, rating.winnerId)]);
+  assert.deepEqual(outcomes.results.map(row => row.status), ['failed', 'resolved', 'resolved', 'failed']);
+  assert.equal(outcomes.results[0].code, 'SYNC_CONFLICT_STALE');
+  assert.equal(outcomes.pending, 0);
+  const journal = await records(entry);
+  assert.deepEqual(journal.map(operation => operation.changes), [{ rating: wrap('int', 4) }, { 'tag:摄影': wrap('bool', false) }]);
+  assert.equal(journal[1].clock[journal[0].deviceID], 2);
+  const remaining = await listSyncConflicts(entry.root, entry.libraryId);
+  assert.deepEqual(remaining.conflicts.map(item => item.field), ['note']);
+});
+
+test('batch parent choices are revalidated after earlier collection moves', async t => {
+  const { entry, profile } = await setup(t);
+  await remote(entry, appleDevice, 1, remoteCollectionBirth('第一层'), {}, false, 'alpha');
+  await remote(entry, appleDevice, 2, remoteCollectionBirth('第二层'), {}, false, 'beta');
+  await remote(entry, appleDevice, 3, { parentID: nil }, {}, false, 'alpha');
+  await remote(entry, appleDevice, 4, { parentID: nil }, {}, false, 'beta');
+  const moveAlpha = await remote(entry, otherDevice, 1, { parentID: wrap('string', 'beta') }, { [appleDevice]: 2 }, false, 'alpha');
+  const moveBeta = await remote(entry, otherDevice, 2, { parentID: wrap('string', 'alpha') }, { [appleDevice]: 2 }, false, 'beta');
+  const { conflicts } = await listSyncConflicts(entry.root, entry.libraryId);
+  const alpha = conflicts.find(item => item.entityId === 'alpha');
+  const beta = conflicts.find(item => item.entityId === 'beta');
+  assert.ok(alpha.candidates.find(item => item.choiceId === moveAlpha.id).selectable);
+  assert.ok(beta.candidates.find(item => item.choiceId === moveBeta.id).selectable);
+  const writer = new DirectorySyncWriter({ directory: profile });
+  await writer.initialize();
+  t.after(() => writer.close());
+  const { results } = await writer.resolveConflicts(entry, [resolve(alpha, moveAlpha.id), resolve(beta, moveBeta.id)]);
+  assert.deepEqual(results.map(row => row.status), ['resolved', 'failed']);
+  assert.equal(results[1].code, 'SYNC_CONFLICT_CHOICE');
+  assert.equal((await records(entry)).length, 1);
+  const catalog = await readLibrary(entry.root);
+  assert.equal(catalog.collections.find(row => row.id === 'alpha').parentId, 'beta');
+  assert.equal(catalog.collections.find(row => row.id === 'beta').parentId, null);
+});
+
+test('batch returns separate published and durable pending results when a provider write is interrupted', async t => {
+  const { entry, profile } = await setup(t);
+  await remote(entry, appleDevice, 1, mobileBirth, {}, true);
+  await remote(entry, appleDevice, 2, { note: wrap('string', '手机备注'), rating: wrap('int', 2) });
+  const alternative = await remote(entry, otherDevice, 1, { note: wrap('string', '另一条备注'), rating: wrap('int', 4) }, { [appleDevice]: 1 });
+  const { conflicts } = await listSyncConflicts(entry.root, entry.libraryId);
+  const writer = new DirectorySyncWriter({ directory: profile });
+  await writer.initialize();
+  t.after(() => writer.close());
+  const open = fs.open;
+  let staged = 0;
+  const fault = t.mock.method(fs, 'open', (filename, ...args) => {
+    if (args[0] === 'wx' && String(filename).startsWith(entry.root + path.sep) &&
+        path.basename(filename).startsWith('.materialshelf-publish-') && ++staged === 2) {
+      return Promise.reject(Object.assign(new Error('synthetic provider interruption'), { code: 'EIO' }));
+    }
+    return open(filename, ...args);
+  });
+  const outcome = await writer.resolveConflicts(entry, conflicts.map(item => resolve(item, alternative.id)));
+  fault.mock.restore();
+  assert.deepEqual(outcome.results.map(row => row.status), ['resolved', 'pending']);
+  assert.equal(outcome.pending, 1);
+  assert.match(outcome.results[1].message, /暂时无法写入/);
+  assert.equal((await records(entry)).length, 1);
+  assert.equal((await writer.retry(entry)).pending, 0);
+  assert.equal((await records(entry)).length, 2);
+  assert.equal((await listSyncConflicts(entry.root, entry.libraryId)).total, 0);
+});
+
 test('reviews both peer values, adopts only an observed choice, and keeps the current value with a causal delta', async t => {
   const { entry, profile } = await setup(t);
   await remote(entry, appleDevice, 1, mobileBirth, {}, true);
@@ -297,6 +376,34 @@ test('reviews both peer values, adopts only an observed choice, and keeps the cu
   assert.equal(library.assets[0].note, 'iPad 写的备注');
   assert.equal(library.syncConflicts, 0);
   assert.equal((await listSyncConflicts(entry.root, entry.libraryId)).total, 0);
+});
+
+test('round-trips device labels without changing conflict identity or requiring labels on old operations', async t => {
+  const { entry, profile } = await setup(t);
+  await remote(entry, appleDevice, 1, mobileBirth, {}, true);
+  const writer = new DirectorySyncWriter({ directory: profile,
+    device: { platform: 'windows', model: '测试电脑型号', name: ' WIN-TEST\u202e ' } });
+  await writer.initialize();
+  t.after(() => writer.close());
+  await writer.mutate(entry, { action: 'edit', ids: [assetID], note: 'Windows 修改' });
+  const [desktop] = await records(entry);
+  const phone = await remote(entry, appleDevice, 2, { note: wrap('string', '手机修改') });
+  const legacy = await remote(entry, otherDevice, 1, { note: wrap('string', '旧客户端') }, { [appleDevice]: 1 });
+  const conflict = async () => (await listSyncConflicts(entry.root, entry.libraryId)).conflicts[0];
+  const before = await conflict();
+  const annotate = (operation, device) => fs.writeFile(path.join(entry.root, 'changes', operation.deviceID,
+    `${operation.counter}-${operation.id}.json`), JSON.stringify({ ...operation, device }));
+  const laterPhone = await remote(entry, appleDevice, 3, { rating: wrap('int', 3) });
+  await annotate(laterPhone, { platform: 'iphone', model: 'iPhone16,2' });
+  await annotate(legacy, { platform: 'unsupported', name: 'should be ignored' });
+  const after = await conflict();
+  const candidates = new Map(after.candidates.map(candidate => [candidate.choiceId, candidate]));
+  assert.deepEqual(desktop.device, { platform: 'windows', model: '测试电脑型号', name: 'WIN-TEST' });
+  assert.deepEqual(candidates.get(desktop.id).device, desktop.device);
+  assert.deepEqual(candidates.get(phone.id).device, { platform: 'iphone', model: 'iPhone16,2' });
+  assert.equal(candidates.get(legacy.id).device, undefined);
+  assert.equal(candidates.get(legacy.id).deviceId, otherDevice);
+  assert.equal(after.signature, before.signature);
 });
 
 test('rejects conflict choices after a newer peer value while keeping pending and old-format libraries read-only', async t => {

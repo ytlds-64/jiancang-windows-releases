@@ -11,6 +11,7 @@ const operationFile = /^([1-9][0-9]*)-([0-9a-f-]{36})\.json$/i;
 const stagingFile = /^\.materialshelf-publish-([0-9a-f-]{36})$/i;
 const collectionDirectories = new Set(['集合', '未分类', '回收站', '历史原件']);
 const assetKinds = new Set(['image', 'video', 'pdf', 'audio', 'document', 'link']);
+const devicePlatforms = new Set(['windows', 'iphone', 'ipad']);
 const providerWait = new Set(['ENOENT', 'ENODATA', 'EAGAIN', 'EBUSY', 'ETIMEDOUT', 'EIO', 'EACCES', 'EPERM', 'UNKNOWN']);
 const maxOperations = 100_000;
 const maxBytes = 64 * 1024 * 1024;
@@ -83,6 +84,15 @@ async function readJSON(location, sizeLimit, badJSON) {
 
 function validText(value, sizeLimit, allowEmpty = true) {
   return typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= sizeLimit && (allowEmpty || value.length > 0);
+}
+
+function syncDeviceMetadata(value) {
+  if (!isObject(value) || !devicePlatforms.has(value.platform)) return undefined;
+  const label = value => typeof value === 'string'
+    ? Array.from(value.slice(0, 384).replace(/[\p{Cc}\p{Cf}\p{Cs}]/gu, '').trim()).slice(0, 96).join('').trim() : '';
+  const model = label(value.model);
+  const name = label(value.name);
+  return { platform: value.platform, ...(model && { model }), ...(name && { name }) };
 }
 
 function validEntityID(value) {
@@ -191,7 +201,8 @@ function decodeOperation(raw, libraryId, format, device, filename) {
   }
   return {
     id: raw.id, device, counter: raw.counter, clock: new Map(clockEntries),
-    kind: raw.entityKind, entity: raw.entityID, changes: decoded, asset, remaining: 0, next: [],
+    kind: raw.entityKind, entity: raw.entityID, changes: decoded, asset,
+    deviceMetadata: syncDeviceMetadata(raw.device), remaining: 0, next: [],
   };
 }
 
@@ -770,7 +781,7 @@ function conflictCandidateType({ kind, entityId, state, field, selected }, targe
   return value === null ? 'null' : type;
 }
 
-function describeConflict(conflict, entities, collections, writeReady, reason = 'concurrent-field') {
+function describeConflict(conflict, entities, collections, writeReady, devices, reason = 'concurrent-field') {
   const { kind, entityId, state, field, versions, selected } = conflict;
   const target = conflictTarget(entities, field);
   const membership = field.startsWith('member:');
@@ -781,8 +792,10 @@ function describeConflict(conflict, entities, collections, writeReady, reason = 
     .toSorted((left, right) => right.operation.counter - left.operation.counter || compare(left.operation.device, right.operation.device))]
     .slice(0, candidateLimit).map(version => {
       const { operation, value } = version;
+      const device = operation.deviceMetadata ?? devices.get(operation.device)?.metadata;
       const valueTruncated = typeof value === 'string' && value.length > conflictTextLimit;
       return { choiceId: operation.id, deviceId: operation.device, operationId: operation.id,
+        ...(device && { device }),
         counter: operation.counter, value: valueTruncated ? value.slice(0, conflictTextLimit) : value, valueTruncated,
         displayValue: field === 'parentID' && value !== null ? bestEntityName(entities.collection.get(value), 'collection', value) : undefined,
         sourceEntityName: reason === 'collection-cycle' ? bestEntityName(entities.collection.get(operation.entity), 'collection', operation.entity) : undefined,
@@ -849,6 +862,12 @@ async function listSyncConflicts(selectedDirectory, expectedLibraryId, acknowled
   if (manifest.libraryID !== expectedLibraryId) throw new LibraryReadError('这个文件夹属于另一份同步库。', 'SYNC_LIBRARY_CHANGED');
   const { operations, byDevice, pending } = await readOperations(root, manifest);
   const ready = readyOperations(operations, byDevice);
+  const devices = new Map();
+  for (const operation of ready) {
+    if (operation.deviceMetadata && operation.counter > (devices.get(operation.device)?.counter ?? 0)) {
+      devices.set(operation.device, { counter: operation.counter, metadata: operation.deviceMetadata });
+    }
+  }
   const entities = replay(ready);
   const logIncomplete = pending > 0 || ready.length < operations.length;
   const writeReady = manifest.version === 6 && isUUID(manifest.namingDeviceID) && !logIncomplete;
@@ -865,11 +884,11 @@ async function listSyncConflicts(selectedDirectory, expectedLibraryId, acknowled
   for (const conflict of fieldConflicts(entities)) {
     if (conflict.field === 'life' && acknowledged.has(conflictSignature(conflict))) continue;
     total++;
-    if (conflicts.length < conflictLimit) conflicts.push(describeConflict(conflict, entities, collections, writeReady));
+    if (conflicts.length < conflictLimit) conflicts.push(describeConflict(conflict, entities, collections, writeReady, devices));
   }
   for (const cycle of cycles) {
     if (conflicts.length === conflictLimit) break;
-    conflicts.push(describeConflict(cycle, entities, collections, writeReady, 'collection-cycle'));
+    conflicts.push(describeConflict(cycle, entities, collections, writeReady, devices, 'collection-cycle'));
   }
   return { format: manifest.version, total, truncated: total > conflicts.length, conflicts, logIncomplete };
 }
@@ -984,4 +1003,4 @@ const historyDefaults = new Map([
 ]);
 
 module.exports = { readLibrary, readWriteState, validateWriteOperation, listSyncConflicts, conflictChoice,
-  confirmDeletionConflict, historyField, protocolRoot, readManifest, readJSON, inspect };
+  confirmDeletionConflict, historyField, protocolRoot, readManifest, readJSON, inspect, syncDeviceMetadata };

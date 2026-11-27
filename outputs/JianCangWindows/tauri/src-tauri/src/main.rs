@@ -596,6 +596,7 @@ async fn library_command(
         | "sync:retry-write"
         | "sync-conflicts:list"
         | "sync-conflicts:resolve"
+        | "sync-conflicts:resolve-batch"
         | "browser-capture:status"
         | "browser-capture:history"
         | "browser-capture:copy-history-address"

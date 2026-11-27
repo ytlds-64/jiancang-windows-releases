@@ -3,6 +3,7 @@
 (() => {
   const counts = new Intl.NumberFormat('zh-CN');
   const date = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
+  const platforms = new Map([['windows', 'Windows 端'], ['iphone', 'iPhone 端'], ['ipad', 'iPad 端']]);
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -63,10 +64,15 @@
       color.style.backgroundColor = '#' + candidate.value;
       value.prepend(color);
     }
-    const origin = element('span', 'sync-candidate-origin',
-      `设备 ${candidate.deviceId.slice(-8)} · 记录 ${counts.format(candidate.counter)}`);
-    origin.title = `设备 ${candidate.deviceId}\n操作 ${candidate.operationId}`;
-    body.append(value, origin);
+    const platform = platforms.get(candidate.device?.platform);
+    const source = platform
+      ? [...new Set([platform, candidate.device.model, candidate.device.name].filter(Boolean))].join(' · ')
+      : `设备 ${candidate.deviceId.slice(-8)}`;
+    const origin = element('span', 'sync-candidate-origin', source);
+    const record = element('span', 'sync-candidate-origin',
+      [platform && `设备 ${candidate.deviceId.slice(-8)}`, `记录 ${counts.format(candidate.counter)}`].filter(Boolean).join(' · '));
+    record.title = `设备 ${candidate.deviceId}\n操作 ${candidate.operationId}`;
+    body.append(value, origin, record);
     if (candidate.valueTruncated) body.append(element('span', 'sync-candidate-origin', '仅显示前 2048 个字符'));
     row.append(body);
     return row;
@@ -85,7 +91,17 @@
     const summary = element('p', 'sync-conflicts-summary');
     summary.setAttribute('role', 'status');
     const refresh = button('刷新', 'outline-button', () => void load());
-    overview.append(summary, refresh);
+    const tools = element('div', 'sync-conflicts-tools');
+    const selectAllLabel = element('label', 'sync-conflicts-select-all', '全选可保留当前值的冲突');
+    const selectAll = element('input');
+    selectAll.type = 'checkbox';
+    selectAllLabel.prepend(selectAll);
+    const clear = button('取消选择', 'outline-button', () => {
+      choices.clear();
+      updateControls();
+    });
+    tools.append(selectAllLabel, clear, refresh);
+    overview.append(summary, tools);
     const layout = element('div', 'sync-conflicts-layout');
     const list = element('nav', 'sync-conflicts-list');
     list.setAttribute('aria-label', '冲突记录');
@@ -94,7 +110,7 @@
     const footer = element('footer', 'sync-conflicts-footer');
     const message = element('p', 'sync-conflicts-message');
     message.setAttribute('role', 'status');
-    const apply = button('确认选择', 'primary-button', () => void resolve());
+    const apply = button('处理所选冲突', 'primary-button', () => void resolve());
     footer.append(message, apply);
     dialog.append(header, overview, layout, footer);
     document.body.append(dialog);
@@ -102,45 +118,108 @@
     let entry;
     let view;
     let active;
-    let choiceId;
+    const choices = new Map();
+    const outcomes = new Map();
+    const rows = new Map();
     let guidance = '';
     let working = false;
-    let committed = false;
     let request = 0;
 
     function setWorking(value) {
       working = value;
       refresh.disabled = value;
       dialog.setAttribute('aria-busy', String(value));
-      updateApply();
+      updateControls();
     }
 
-    function updateApply() {
-      const canEdit = entry?.writable && active?.resolvable;
-      apply.hidden = !canEdit || committed;
-      apply.disabled = working || !(choiceId || active?.moveToRoot || active?.acknowledgeDeletion);
-      apply.textContent = active?.moveToRoot ? '移至顶层并解决'
-        : active?.acknowledgeDeletion ? '确认已查看'
-          : !choiceId ? '确认选择' : choiceId === active.winnerId ? '保留当前值' : '采用所选值';
+    function canEdit(conflict) {
+      const status = outcomes.get(conflict.signature)?.status;
+      return entry.writable && conflict.resolvable && status !== 'pending' && status !== 'resolved';
     }
+
+    function currentChoice(conflict) {
+      if (!canEdit(conflict) || conflict.moveToRoot || conflict.acknowledgeDeletion) return;
+      if (conflict.candidates.some(candidate => candidate.choiceId === conflict.winnerId && candidate.selectable)) {
+        return conflict.winnerId;
+      }
+    }
+
+    function updateControls() {
+      const conflicts = view?.conflicts ?? [];
+      const defaults = conflicts.filter(conflict => currentChoice(conflict));
+      const selectedDefaults = defaults.filter(conflict => choices.has(conflict.signature)).length;
+      const hasActions = conflicts.some(canEdit);
+      selectAllLabel.hidden = !defaults.length;
+      selectAll.disabled = working;
+      selectAll.checked = defaults.length > 0 && selectedDefaults === defaults.length;
+      selectAll.indeterminate = selectedDefaults > 0 && !selectAll.checked;
+      clear.hidden = !hasActions;
+      clear.disabled = working || !choices.size;
+      apply.hidden = !hasActions;
+      apply.disabled = working || !choices.size;
+      apply.textContent = choices.size ? `处理所选（${counts.format(choices.size)}）` : '处理所选冲突';
+      for (const [conflict, row] of rows) {
+        const { checkbox, item, status } = row;
+        const outcome = outcomes.get(conflict.signature);
+        const chosen = choices.get(conflict.signature);
+        checkbox.checked = choices.has(conflict.signature);
+        checkbox.disabled = working || !canEdit(conflict) || !(checkbox.checked || currentChoice(conflict));
+        item.disabled = working;
+        const candidate = conflict.candidates.find(option => option.choiceId === chosen);
+        status.textContent = outcome?.status === 'pending' ? '等待写入'
+          : outcome?.status === 'resolved' ? '已处理'
+            : outcome?.status === 'failed' ? '提交失败'
+              : checkbox.checked ? candidate
+                ? chosen === conflict.winnerId ? '保留当前值' : `采用 · ${valueText(conflict, candidate)}`
+                : conflict.moveToRoot ? '移至顶层' : '确认已查看' : '';
+        status.hidden = !status.textContent;
+      }
+      for (const option of detail.querySelectorAll('input, button')) {
+        option.disabled = working;
+        if (option.type === 'radio') option.checked = option.value === choices.get(active?.signature);
+      }
+    }
+
+    selectAll.addEventListener('change', () => {
+      for (const conflict of view?.conflicts ?? []) {
+        const current = currentChoice(conflict);
+        if (!current) continue;
+        if (!selectAll.checked) choices.delete(conflict.signature);
+        else if (!choices.has(conflict.signature)) choices.set(conflict.signature, current);
+      }
+      updateControls();
+    });
 
     function render() {
       const conflicts = view?.conflicts ?? [];
       const focused = list.contains(document.activeElement);
       if (view) summary.textContent = `${entry.name || '见藏同步库'} · ${counts.format(view.total)} 条冲突`;
+      rows.clear();
       const entries = conflicts.map(conflict => {
+        const row = element('div', 'sync-conflicts-list-row');
+        const checkbox = element('input');
+        checkbox.type = 'checkbox';
+        checkbox.title = '勾选后默认保留当前值，可在右侧改选版本。';
+        checkbox.setAttribute('aria-label', `选择 ${conflict.entityName} · ${fieldName(conflict)}`);
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) choices.set(conflict.signature, currentChoice(conflict));
+          else choices.delete(conflict.signature);
+          updateControls();
+        });
+        row.append(checkbox);
         const item = button('', 'sync-conflicts-record', () => {
           if (working) return;
           active = conflict;
-          choiceId = undefined;
-          committed = false;
-          message.textContent = guidance;
           render();
         });
         if (conflict === active) item.setAttribute('aria-current', 'true');
         item.title = `${fieldName(conflict)} · ${conflict.entityName}`;
         item.append(element('strong', '', fieldName(conflict)), element('span', '', conflict.entityName));
-        return item;
+        const status = element('span', 'sync-conflicts-record-status');
+        item.append(status);
+        row.append(item);
+        rows.set(conflict, { checkbox, item, status });
+        return row;
       });
       list.replaceChildren(...entries);
       if (focused) list.querySelector('[aria-current="true"]')?.focus({ preventScroll: true });
@@ -149,7 +228,7 @@
       if (!active) {
         if (view) detail.append(element('p', 'sync-conflicts-empty', view.logIncomplete
           ? '已读到的记录中暂无冲突，等待其他同步记录取回。' : '这份素材库没有待处理的同步冲突。'));
-        updateApply();
+        updateControls();
         return;
       }
       detail.scrollTop = 0;
@@ -157,8 +236,12 @@
       const compare = element('div', 'sync-conflict-comparison');
       const currentColumn = element('div', 'sync-conflict-column');
       const alternatives = element('div', 'sync-conflict-column');
-      const choose = id => { if (!working) { choiceId = id; updateApply(); } };
-      const allow = candidate => entry.writable && candidate.selectable && !committed;
+      const choose = id => {
+        if (working) return;
+        choices.set(active.signature, id);
+        updateControls();
+      };
+      const allow = candidate => canEdit(active) && candidate.selectable;
       const cycle = active.reason === 'collection-cycle';
       currentColumn.append(element('h4', '', cycle ? '当前显示' : active.displayedParent ? '当前记录' : '当前值'));
       if (cycle) currentColumn.append(element('div', 'sync-candidate', '顶层集合'));
@@ -181,8 +264,14 @@
         `当前集合显示在「${active.displayedParent}」。`));
       else if (entry.writable && !view.logIncomplete && !active.resolvable) detail.append(element('p', 'sync-conflicts-note',
         '可查看这条记录，请在 iPhone 或 iPad 处理。'));
+      if (canEdit(active) && (active.moveToRoot || active.acknowledgeDeletion)) {
+        const queue = button(active.moveToRoot ? '将移至顶层加入本批' : '将确认已查看加入本批', 'outline-button sync-conflicts-special', () => choose(null));
+        detail.append(queue);
+      }
+      const outcome = outcomes.get(active.signature);
+      if (outcome?.message) detail.append(element('p', 'sync-conflicts-note', outcome.message));
       detail.append(compare);
-      updateApply();
+      updateControls();
     }
 
     async function load({ afterWrite = false } = {}) {
@@ -197,8 +286,16 @@
         if (result?.ok === false || !Array.isArray(result?.conflicts)) throw new Error(result?.message || '无法读取同步冲突。');
         view = result;
         active = view.conflicts.find(conflict => conflict.signature === previous?.signature) ?? view.conflicts[0];
-        choiceId = undefined;
-        committed = false;
+        const available = new Map(view.conflicts.map(conflict => [conflict.signature, conflict]));
+        for (const [signature, choice] of choices) {
+          const conflict = available.get(signature);
+          if (!conflict || !canEdit(conflict) || (choice
+            ? !conflict.candidates.some(candidate => candidate.choiceId === choice && candidate.selectable)
+            : !conflict.moveToRoot && !conflict.acknowledgeDeletion)) choices.delete(signature);
+        }
+        for (const signature of outcomes.keys()) {
+          if (!available.has(signature)) outcomes.delete(signature);
+        }
         const readOnly = view.logIncomplete ? '等待 iCloud 取回完整的记录，取回后点击刷新。'
           : view.format < 6 ? '在 iPhone 或 iPad 升级同步库后，可在 Windows 处理冲突。'
             : !entry.writable ? '可查看冲突。在同步状态中开启 Windows 写入，即可选择保留的值。' : '';
@@ -208,33 +305,48 @@
       } catch (error) {
         if (ownRequest === request) {
           if (!view) summary.textContent = '同步冲突读取失败';
-          message.textContent = error.message || '暂时无法读取同步冲突，请刷新重试。';
+          const errorText = error.message || '暂时无法读取同步冲突，请刷新重试。';
+          message.textContent = afterWrite ? `${message.textContent} 刷新失败：${errorText}` : errorText;
         }
       } finally { if (ownRequest === request) setWorking(false); }
     }
 
     async function resolve() {
-      if (working || committed || !(choiceId || active?.moveToRoot || active?.acknowledgeDeletion) || !active?.resolvable || !entry?.writable) return;
-      const { kind, entityId, field, signature, moveToRoot, acknowledgeDeletion } = active;
+      if (working || !choices.size) return;
+      const commands = view.conflicts.filter(conflict => choices.has(conflict.signature))
+        .map(({ kind, entityId, field, signature, moveToRoot, acknowledgeDeletion }) => ({
+          action: 'resolveConflict', kind, entityId, field, signature,
+          choiceId: choices.get(signature) ?? undefined, moveToRoot, acknowledgeDeletion,
+        }));
       setWorking(true);
-      message.textContent = '正在提交所选值…';
+      message.textContent = `正在处理 ${counts.format(commands.length)} 条冲突…`;
       close.disabled = true;
       try {
-        const result = await bridge.resolveSyncConflict(entry.id, { action: 'resolveConflict', kind, entityId, field, signature,
-          choiceId, moveToRoot, acknowledgeDeletion });
-        if (result?.ok === false) throw new Error(result.message);
-        if (result?.pending) {
-          choiceId = undefined;
-          committed = true;
-          message.textContent = result.error || '选择已保存到本机，可在同步状态中重试提交。';
-          render();
-        } else {
-          message.textContent = acknowledgeDeletion ? '已在这台电脑确认。' : '已提交所选值。';
-          notify?.(acknowledgeDeletion ? '已确认永久移除记录。' : '已处理同步冲突。');
-          await load({ afterWrite: true });
+        const result = await bridge.resolveSyncConflicts(entry.id, commands);
+        if (!Array.isArray(result?.results)) throw new Error(result?.message || '暂时无法提交所选值。');
+        let handled = 0;
+        let pending = 0;
+        let failed = 0;
+        let failure;
+        for (const outcome of result.results) {
+          outcomes.set(outcome.signature, outcome);
+          if (outcome.status === 'resolved') handled++;
+          else if (outcome.status === 'pending') pending++;
+          else {
+            failed++;
+            failure ??= outcome.message;
+            continue;
+          }
+          choices.delete(outcome.signature);
         }
+        const status = [handled && `已处理 ${counts.format(handled)} 条`,
+          pending && `${counts.format(pending)} 条等待写入`, failed && `${counts.format(failed)} 条失败`].filter(Boolean);
+        const explanation = failure || (pending ? '选择已保存到本机，可在同步状态中重试提交。' : '');
+        message.textContent = status.join(' · ') + (explanation ? `。 ${explanation}` : '。');
+        if (handled && !pending && !failed) notify?.(`已处理 ${counts.format(handled)} 条同步冲突。`);
+        render();
+        await load({ afterWrite: true });
       } catch (error) {
-        choiceId = undefined;
         message.textContent = error.message || '暂时无法提交所选值，请刷新后重新选择。';
         render();
       } finally {
@@ -250,9 +362,10 @@
       open(nextEntry) {
         if (!nextEntry?.id || close.disabled) return;
         entry = nextEntry;
-        view = active = choiceId = undefined;
+        view = active = undefined;
+        choices.clear();
+        outcomes.clear();
         guidance = '';
-        committed = false;
         render();
         if (!dialog.open) dialog.showModal();
         void load();

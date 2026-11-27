@@ -617,7 +617,8 @@ test('controls format-6 two-way sync, captured originals, durable retry and conn
   const [{ kind, entityId, field, signature }] = review.conflicts;
   const choice = { kind, entityId, field, signature, choiceId: phoneEdit };
   await assert.rejects(call('sync-conflicts:resolve', [id, { ...choice, choiceId: randomUUID() }]), { code: 'SYNC_CONFLICT_CHOICE' });
-  const resolved = await call('sync-conflicts:resolve', [id, { ...choice, value: '请求中注入的备注' }]);
+  const resolved = await call('sync-conflicts:resolve-batch', [id, [{ ...choice, value: '请求中注入的备注' }]]);
+  assert.deepEqual(resolved.results, [{ signature, status: 'resolved' }]);
   assert.equal(resolved.state.library.assets[0].note, 'iPhone 备注');
   assert.equal((await call('sync-conflicts:list', [id])).total, 0);
 

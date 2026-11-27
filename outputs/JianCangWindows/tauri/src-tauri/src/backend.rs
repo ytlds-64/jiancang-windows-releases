@@ -124,6 +124,7 @@ impl Backend {
             | "image-conversion:start"
             | "board:export"
             | "suggestion:apply"
+            | "sync-conflicts:resolve-batch"
             | "local-backup:create"
             | "local-backup:restore"
             | "local-backup:run"
