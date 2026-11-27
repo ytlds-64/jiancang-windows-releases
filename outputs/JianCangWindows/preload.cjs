@@ -184,6 +184,7 @@ contextBridge.exposeInMainWorld('jiancang', {
   saveSuggestionSettings: value => ipcRenderer.invoke('suggestion:save-settings', value),
   startSuggestions: items => ipcRenderer.invoke('suggestion:start', items),
   getSuggestions: () => ipcRenderer.invoke('suggestion:batch'),
+  getSuggestionOriginalNote: taskId => ipcRenderer.invoke('suggestion:batch', { originalNote: taskId }),
   retrySuggestion: task => ipcRenderer.invoke('suggestion:retry', task),
   retryFailedSuggestions: batchId => ipcRenderer.invoke('suggestion:retry-failed', batchId),
   pauseSuggestions: batchId => ipcRenderer.invoke('suggestion:pause', batchId),

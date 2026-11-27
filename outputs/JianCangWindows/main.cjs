@@ -2815,7 +2815,8 @@ function handleFeatureActions() {
     await suggestionCatalogRefresh;
     return requireSuggestions().start(items);
   });
-  feature('suggestion:batch', () => requireSuggestions().review());
+  feature('suggestion:batch', options => options?.originalNote
+    ? requireSuggestions().originalNote(options.originalNote) : requireSuggestions().review());
   feature('suggestion:retry', task => requireSuggestions().retry(task));
   feature('suggestion:retry-failed', batchId => requireSuggestions().retryFailed(batchId));
   feature('suggestion:pause', batchId => requireSuggestions().pause(batchId));

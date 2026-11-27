@@ -23,6 +23,7 @@
   let lastImagePress;
   let warmCatalog;
   let warming;
+  let destinationsVersion = 0;
   let pointerDrag;
 
   function contextActive() {
@@ -187,13 +188,18 @@
   async function send(action, params) {
     const result = await chrome.runtime.sendMessage({ type: 'jiancang:collector-' + action, ...params });
     if (!result?.ok) throw Object.assign(new Error(result?.message || '无法完成采集，请重新打开面板。'), { status: result?.status });
+    if (action === 'image' || action === 'page') {
+      destinationsVersion++;
+      warmCatalog = undefined;
+    }
     return result;
   }
 
   function warmDestinations() {
     if (!automatic || document.visibilityState === 'hidden' || warming || warmCatalog?.expires > Date.now()) return;
+    const version = destinationsVersion;
     warming = send('targets', { connect: false, allowCache: true }).then(data => {
-      if (automatic) warmCatalog = { data, expires: Date.now() + 12_000 };
+      if (automatic && version === destinationsVersion) warmCatalog = { data, expires: Date.now() + 12_000 };
     }).catch(() => {}).finally(() => { warming = undefined; });
   }
 

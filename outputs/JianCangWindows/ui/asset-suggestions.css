@@ -5,7 +5,7 @@
 }
 .ai-review[open] {
   width: min(92vw, 770px);
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
 }
 .ai-settings[open] { width: min(92vw, 475px); grid-template-rows: auto minmax(0, 1fr); }
 .ai-head { padding: 11px 12px 11px 18px; }
@@ -21,6 +21,8 @@
 .ai-background-task { color: var(--active-ink); white-space: nowrap; }
 .ai-checkpoint-warning { color: var(--active-ink); margin-top: 4px; }
 .ai-review-body { overflow: auto; min-width: 0; overscroll-behavior: contain; }
+.ai-review-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 11px; padding: 6px 18px; border-top: 1px solid var(--line); }
+.ai-review-pager .outline-button { min-height: 26px; padding: 3px 7px; font-size: 11px; }
 .ai-pending {
   display: flex;
   align-items: center;

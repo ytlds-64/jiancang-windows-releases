@@ -1074,8 +1074,11 @@
       const request = current;
       current = null;
       removals.disconnect();
-      clearTimeout(request.timer);
-      request.card.classList.remove('audio-preview-playing');
+      clearTimeout(request.delay);
+      cancelAnimationFrame(request.frame);
+      request.events?.abort();
+      request.overlay?.remove();
+      request.card.classList.remove('audio-preview-active');
       if (request.media) {
         request.media.pause();
         request.media.removeAttribute('src');
@@ -1083,36 +1086,145 @@
       }
     }
 
-    function attach(card, url) {
+    function preview(card, picture, url) {
+      stop();
+      current = { card, picture, url, playRevision: 0 };
+      removals.observe(gallery, { childList: true });
+      return current;
+    }
+
+    function applySeek(request) {
+      const { media, fraction } = request;
+      if (fraction === undefined || !media || !Number.isFinite(media.duration) || media.duration <= 0) return;
+      request.fraction = undefined;
+      media.currentTime = media.duration * fraction;
+    }
+
+    function resume(request) {
+      const revision = ++request.playRevision;
+      void request.media.play().catch(() => {
+        if (current === request && request.playRevision === revision) stop(request.card);
+      });
+    }
+
+    function renderProgress(request) {
+      const { picture, media, overlay, played, timeLabel, toggle } = request;
+      const waveform = picture.querySelector('img.audio-waveform');
+      if (waveform !== request.waveform && waveform?.complete && waveform.naturalWidth) {
+        request.waveform = waveform;
+        played.width = waveform.naturalWidth;
+        played.height = waveform.naturalHeight;
+        const context = played.getContext('2d');
+        if (context) {
+          context.drawImage(waveform, 0, 0);
+          context.globalCompositeOperation = 'source-in';
+          context.fillStyle = getComputedStyle(picture).getPropertyValue('--accent').trim();
+          context.fillRect(0, 0, played.width, played.height);
+        }
+      }
+      const duration = Number.isFinite(media.duration) ? media.duration : 0;
+      const elapsed = request.fraction === undefined ? media.currentTime : request.fraction * duration;
+      const progress = duration > 0 ? Math.min(1, elapsed / duration) * 100 : 0;
+      overlay.style.setProperty('--audio-progress', `${progress.toFixed(2)}%`);
+      const detail = duration > 0 ? `${timestamp(elapsed)} / ${timestamp(duration)}` : timestamp(elapsed);
+      if (timeLabel.textContent !== detail) timeLabel.textContent = detail;
+      const icon = media.paused ? 'play' : 'pause';
+      if (toggle.dataset.symbol !== icon) setIcon(toggle, icon, media.paused ? '继续试听' : '暂停试听');
+    }
+
+    function start(request) {
+      clearTimeout(request.delay);
+      const { card, picture, url } = request;
+      const media = request.media = new Audio();
+      media.volume = preferredVolume.volume;
+      media.muted = preferredVolume.muted;
+      const overlay = request.overlay = makeElement('span', 'audio-waveform-overlay');
+      const played = request.played = makeElement('canvas', 'audio-waveform-played');
+      const status = makeElement('span', 'audio-waveform-status');
+      const toggle = request.toggle = makeElement('span', 'audio-waveform-toggle');
+      const timeLabel = request.timeLabel = makeElement('span', 'audio-waveform-time');
+      const playhead = makeElement('span', 'audio-waveform-playhead');
+      status.append(toggle, timeLabel);
+      overlay.append(played, playhead, makeElement('span', 'audio-waveform-cursor'), status);
+      overlay.setAttribute('aria-hidden', 'true');
+      picture.append(overlay);
+      card.classList.add('audio-preview-active');
+      request.events = new AbortController();
+      const options = { signal: request.events.signal };
+      function tick(now) {
+        if (current !== request) return;
+        if (!enabled()) { stop(card); return; }
+        if (now - (request.lastPaint ?? 0) >= 32) {
+          request.lastPaint = now;
+          renderProgress(request);
+        }
+        request.frame = requestAnimationFrame(tick);
+      }
+      function finish() { if (current === request) stop(card); }
+      media.addEventListener('playing', () => {
+        renderProgress(request);
+        cancelAnimationFrame(request.frame);
+        request.frame = requestAnimationFrame(tick);
+      }, options);
+      media.addEventListener('pause', () => {
+        cancelAnimationFrame(request.frame);
+        renderProgress(request);
+      }, options);
+      media.addEventListener('loadedmetadata', () => { applySeek(request); renderProgress(request); }, options);
+      for (const event of ['timeupdate', 'durationchange']) media.addEventListener(event, () => renderProgress(request), options);
+      media.addEventListener('ended', finish, options);
+      media.addEventListener('error', finish, options);
+      media.src = url;
+      renderProgress(request);
+      resume(request);
+    }
+
+    function attach(card, picture, url) {
+      function isWaveformAction(event) {
+        return event.button === 0 && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && enabled() &&
+          picture.contains(event.target) && !event.target.closest('.asset-collection-grip') &&
+          picture.classList.contains('audio-waveform-ready');
+      }
+
+      function waveformPosition(clientX) {
+        const { left, width } = picture.getBoundingClientRect();
+        return width ? Math.min(1, Math.max(0, (clientX - left) / width)) : null;
+      }
+
       card.addEventListener('pointerenter', event => {
         if (event.pointerType !== 'mouse' || event.buttons || !enabled()) return;
-        stop();
-        const request = { card };
-        current = request;
-        removals.observe(gallery, { childList: true });
-        request.timer = setTimeout(() => {
+        const request = preview(card, picture, url);
+        request.delay = setTimeout(() => {
           if (current !== request) return;
-          if (document.hidden || !gallery.contains(card) || !card.matches(':hover') || !enabled()) {
-            stop(card);
-            return;
-          }
-          const media = new Audio();
-          request.media = media;
-          media.volume = preferredVolume.volume;
-          media.muted = preferredVolume.muted;
-          const finish = () => {
-            if (current === request) stop(card);
-          };
-          media.addEventListener('playing', () => {
-            if (current === request) card.classList.add('audio-preview-playing');
-          }, { once: true });
-          media.addEventListener('ended', finish, { once: true });
-          media.addEventListener('error', finish, { once: true });
-          media.src = url;
-          void media.play().catch(finish);
+          if (document.hidden || !gallery.contains(card) || !card.matches(':hover') || !enabled()) { stop(card); return; }
+          start(request);
         }, 140);
       });
-      for (const event of ['pointerleave', 'pointercancel', 'pointerdown', 'dragstart']) {
+      card.addEventListener('pointerdown', event => { if (!isWaveformAction(event)) stop(card); });
+      card.addEventListener('click', event => {
+        if (event.detail !== 1 || !isWaveformAction(event)) return;
+        const request = current?.card === card ? current : preview(card, picture, url);
+        if (request.media && request.toggle.contains(event.target)) {
+          if (request.media.paused) resume(request);
+          else { request.playRevision++; request.media.pause(); }
+          return;
+        }
+        const fraction = waveformPosition(event.clientX);
+        if (fraction === null) return;
+        request.fraction = fraction;
+        if (!request.media) start(request);
+        else { applySeek(request); renderProgress(request); }
+      });
+      picture.addEventListener('pointermove', event => {
+        const overlay = current?.card === card && current.overlay;
+        if (!overlay || event.pointerType !== 'mouse' || event.buttons) return;
+        const fraction = waveformPosition(event.clientX);
+        if (fraction !== null) overlay.style.setProperty('--audio-cursor', `${(fraction * 100).toFixed(2)}%`);
+      });
+      picture.addEventListener('pointerleave', () => {
+        if (current?.card === card) current.overlay?.style.removeProperty('--audio-cursor');
+      });
+      for (const event of ['pointerleave', 'pointercancel', 'dragstart']) {
         card.addEventListener(event, () => stop(card));
       }
     }

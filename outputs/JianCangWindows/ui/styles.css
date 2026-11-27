@@ -466,7 +466,26 @@ button.collection-toggle:hover { background: var(--hover); }
 .asset-picture img.audio-waveform { object-fit: fill; opacity: 0; }
 .asset-picture.audio-waveform-ready img.audio-waveform { opacity: 1; }
 .asset-picture.audio-waveform-ready > svg { display: none; }
-.asset-card.audio-preview-playing .asset-frame::after { border-bottom-color: var(--accent); }
+.asset-card.audio-preview-active .asset-picture:not(.audio-waveform-ready) .audio-waveform-overlay { display: none; }
+.asset-card.audio-preview-active .audio-waveform-ready { cursor: pointer; }
+.audio-waveform-overlay { position: absolute; z-index: 1; inset: 0; pointer-events: none; --audio-progress: 0%; }
+.audio-waveform-played {
+  display: block; position: absolute; inset: 0; width: 100%; height: 100%;
+  clip-path: inset(0 calc(100% - var(--audio-progress)) 0 0);
+}
+.audio-waveform-playhead, .audio-waveform-cursor { position: absolute; top: 0; bottom: 0; width: 1px; }
+.audio-waveform-playhead { left: min(var(--audio-progress), calc(100% - 1px)); background: var(--accent); }
+.audio-waveform-cursor { left: min(var(--audio-cursor, -2px), calc(100% - 1px)); background: var(--ink); opacity: .7; }
+.audio-waveform-status {
+  position: absolute; bottom: 5px; left: 5px; display: flex; align-items: center; max-width: calc(100% - 10px);
+  padding-right: 6px; border-radius: 4px; background: #201d19e8; color: #f5f0e7;
+  font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.audio-waveform-toggle { display: grid; flex: none; place-items: center; width: 23px; height: 23px; pointer-events: auto; }
+.audio-waveform-toggle:hover { color: #f1c483; }
+.audio-waveform-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
+.audio-waveform-time { overflow: hidden; text-overflow: ellipsis; }
+.asset-list-row .audio-waveform-status { display: none; }
 .asset-filetype, .asset-favorite { position: absolute; border-radius: 4px; color: #f5f0e7; background: #201d19d9; font-size: 10px; padding: 3px 6px; font-weight: 650; }
 .asset-filetype { inset: auto auto 7px 7px; }
 .asset-picture[data-kind="audio"] .asset-filetype { inset: 7px auto auto 7px; }

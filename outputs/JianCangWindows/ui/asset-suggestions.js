@@ -2,7 +2,8 @@
 
 (() => {
   const fieldLabels = { title: '重命名', tags: '追加标签', note: '替换备注' };
-  const maximumImages = 40;
+  const itemsPerPage = 48;
+  const itemsPerRequest = 300;
   const localProvider = 'lmstudio';
   const selectionKey = 'jiancang-ai-suggestion-selection-v1';
   const accessMessages = {
@@ -72,9 +73,9 @@
 
   function needsFill(task, key) {
     const original = task.original;
-    if (key === 'tags') return !original?.tags?.some(tag => tag.trim());
+    if (key === 'tags') return !(original?.hasTags ?? original?.tags?.some(tag => tag.trim()));
     if (key === 'title') return original?.titleNeedsSuggestion ?? !original?.name?.trim();
-    return !original?.note?.trim();
+    return !(original?.hasNote ?? original?.note?.trim());
   }
 
   function fieldChoice(choices, task, key) {
@@ -101,7 +102,7 @@
       if (!batch || saved?.id !== batch.id || !Array.isArray(saved.rows)) return result;
       if (saved.mode === 'blank' || saved.mode === 'all') result.mode = saved.mode;
       const ids = new Set(batch.tasks.map(task => task.taskId));
-      for (const [taskId, entries] of saved.rows.slice(0, maximumImages)) {
+      for (const [taskId, entries] of saved.rows) {
         if (!ids.has(taskId) || !Array.isArray(entries)) continue;
         const choices = entries.slice(0, 3).filter(([key, fillMissing]) =>
           Object.hasOwn(fieldLabels, key) && (typeof fillMissing === 'boolean' || fillMissing === null));
@@ -289,6 +290,14 @@
     checkpointWarning.hidden = true;
     intro.append(statusLine, recipient, checkpointWarning);
     const body = node('div', 'ai-review-body');
+    const pager = node('div', 'ai-review-pager');
+    const previousPage = button('上一页', 'outline-button');
+    const nextPage = button('下一页', 'outline-button');
+    const pageLabel = node('span', 'ai-help');
+    pager.setAttribute('aria-label', 'AI 整理建议分页');
+    pager.setAttribute('role', 'navigation');
+    pager.hidden = true;
+    pager.append(previousPage, pageLabel, nextPage);
     const issues = messageBox();
     const footer = node('div', 'ai-footer ai-review-footer');
     const bulkControls = node('div', 'ai-bulk-controls');
@@ -316,7 +325,7 @@
     const buttons = node('div', 'ai-footer-buttons');
     buttons.append(dismiss, suspend, retryFailed, generate, save);
     footer.append(bulkControls, buttons);
-    dialog.append(head, intro, body, issues, footer);
+    dialog.append(head, intro, body, pager, issues, footer);
     document.body.append(dialog);
     const backgroundTask = button('AI 整理', 'status-button ai-background-task');
     backgroundTask.id = 'ai-background-task';
@@ -340,6 +349,8 @@
     let choices = emptyChoices();
     let backgroundRevision = 0;
     let discardedBatchId;
+    let page = 0;
+    let applicationProgress = '';
     const settings = settingsDialog(bridge, notify, next => { config = next; if (dialog.open) render(); });
     const isRunning = candidate => !!candidate && !candidate.paused && !candidate.stopped && candidate.tasks.some(pending);
     const busy = () => awaitingStart || saving || changingProgress || dismissing || openingAccess || !!batch?.applying;
@@ -350,7 +361,7 @@
     }
 
     function setBatch(next) {
-      if (next?.id !== batch?.id) choices = savedChoices(next);
+      if (next?.id !== batch?.id) { page = 0; choices = savedChoices(next); }
       batch = next;
       if (next) renderBackgroundTask(next);
       if (dialog.open) render();
@@ -429,6 +440,7 @@
 
     async function open(assets) {
       const token = ++opening;
+      if (assets) page = 0;
       loading = true;
       if (!dialog.open) dialog.showModal();
       errorAt(issues, '');
@@ -477,7 +489,7 @@
       chooseBlank.indeterminate = (choices.mode === 'blank' || filled > 0) && !chooseBlank.checked;
       chooseBlank.disabled = loading || busy() || !fillOptions.length && !pendingSuggestions;
       generate.hidden = working || paused;
-      generate.disabled = loading || busy() || !config?.configured || !staged.length || staged.length > maximumImages;
+      generate.disabled = loading || busy() || !config?.configured || !staged.length;
       generate.textContent = batch?.id ? '重新生成' : '生成建议';
       generate.className = batch?.id ? 'outline-button' : 'primary-button';
       suspend.hidden = !working && !paused;
@@ -492,7 +504,7 @@
       close.disabled = collapse.disabled = dismiss.disabled = setup.disabled = busy();
       save.hidden = !batch;
       save.disabled = loading || busy() || !checked;
-      save.textContent = saving ? '正在应用…' : checked ? `应用 ${checked} 个字段` : '应用建议';
+      save.textContent = saving ? applicationProgress || '正在应用…' : checked ? `应用 ${checked} 个字段` : '应用建议';
     }
 
     function fieldPreview(task, key) {
@@ -530,9 +542,17 @@
         }
         row.append(tags);
       } else row.append(node('p', '', value));
-      if (key === 'note' && task.original?.note) {
+      if (key === 'note' && (task.original?.note || task.original?.noteAvailable)) {
         const note = node('details', 'ai-original-note');
-        note.append(node('summary', '', '查看原备注'), node('p', '', task.original.note));
+        const original = node('p', '', task.original.note || '正在读取…');
+        note.append(node('summary', '', '查看原备注'), original);
+        if (task.original.note === undefined) {
+          note.addEventListener('toggle', async () => {
+            if (!note.open) return;
+            try { original.textContent = response(await bridge.getSuggestionOriginalNote(task.taskId)); }
+            catch (error) { original.textContent = error?.message || '无法读取原备注。'; }
+          });
+        }
         row.append(note);
       }
       return row;
@@ -601,6 +621,13 @@
     function render() {
       const focusedChoice = document.activeElement?.dataset.aiChoice;
       const scrollTop = body.scrollTop;
+      const pages = Math.ceil((batch ? batch.tasks.length : staged.length) / itemsPerPage);
+      page = Math.min(page, Math.max(0, pages - 1));
+      pager.hidden = loading || pages <= 1;
+      previousPage.disabled = page === 0;
+      nextPage.disabled = page + 1 >= pages;
+      pageLabel.textContent = `第 ${page + 1} 页，共 ${pages} 页`;
+      const first = page * itemsPerPage;
       recipient.hidden = !batch || isRunning(batch) || loading || (!batch.paused && (!config?.configured || !staged.length));
       if (batch?.paused) recipient.textContent = batch.canResume ?
         `继续时会将未完成的缩略图发送至 ${batch.label}（${batch.model}）。` :
@@ -620,14 +647,13 @@
         progress.max = total || 1;
         progress.value = done;
         progress.hidden = done === total;
-        const results = batch.tasks.map(taskPreview);
+        const results = batch.tasks.slice(first, first + itemsPerPage).map(taskPreview);
         body.replaceChildren(...results);
       } else {
         progress.hidden = true;
-        statusText.textContent = !staged.length ? '请选择图库里的图片。' : staged.length > maximumImages ?
-          `一次最多处理 ${maximumImages} 张，请缩小选择范围。` : config?.configured ?
+        statusText.textContent = !staged.length ? '请选择图库里的图片。' : config?.configured ?
             `点击生成后，${staged.length} 张缩略图将发送至 ${config.label}（${config.model}）。` : '先在 API 设置中配置支持图片输入的模型。';
-        const picks = staged.slice(0, maximumImages).map(asset => {
+        const picks = staged.slice(first, first + itemsPerPage).map(asset => {
           const item = node('div', 'ai-pending');
           thumbnail(item, asset);
           item.append(node('span', '', asset.name));
@@ -641,6 +667,14 @@
       }
       renderToolbar();
     }
+
+    function turnPage(direction) {
+      page += direction;
+      body.scrollTop = 0;
+      render();
+    }
+    previousPage.addEventListener('click', () => turnPage(-1));
+    nextPage.addEventListener('click', () => turnPage(1));
 
     function applyBulkChoice(checked, mode) {
       if (!batch || busy()) return;
@@ -669,7 +703,13 @@
       errorAt(issues, '');
       renderToolbar();
       try {
-        const next = response(await bridge.startSuggestions(staged.map(({ id, registrationId }) => ({ id, registrationId }))));
+        let next;
+        const uploadId = crypto.randomUUID();
+        for (let offset = 0; offset < staged.length; offset += itemsPerRequest) {
+          const items = staged.slice(offset, offset + itemsPerRequest).map(({ id, registrationId }) => ({ id, registrationId }));
+          const final = offset + items.length === staged.length;
+          next = response(await bridge.startSuggestions(staged.length <= itemsPerRequest ? items : { uploadId, offset, final, items }));
+        }
         batchId = next.id;
         setBatch(next);
       } catch (error) { errorAt(issues, error?.message); }
@@ -697,14 +737,24 @@
       });
       if (!selection?.length) return;
       saving = true;
+      applicationProgress = '';
       errorAt(issues, '');
       renderToolbar();
       try {
-        const result = response(await bridge.applySuggestions(selection));
-        setBatch(result.batch);
-        if (result.applied) notify(`已应用 ${result.applied} 项素材的建议。`);
-        if (result.failed) errorAt(issues, `${result.failed} 项建议未应用，请核对对应素材的提示。`);
-        else if (result.applied && !incomplete(result.batch, choices)) dialog.close();
+        const operation = crypto.randomUUID();
+        let applied = 0;
+        let failed = 0;
+        for (let index = 0; index < selection.length; index += itemsPerRequest) {
+          const rows = selection.slice(index, index + itemsPerRequest).map(row => ({ ...row, operation }));
+          const result = response(await bridge.applySuggestions(rows));
+          applied += result.applied;
+          failed += result.failed;
+          applicationProgress = `已处理 ${Math.min(index + rows.length, selection.length)} / ${selection.length} 项`;
+          setBatch(result.batch);
+        }
+        if (applied) notify(`已应用 ${applied} 项素材的建议。`);
+        if (failed) errorAt(issues, `${failed} 项建议未应用，请核对对应素材的提示。`);
+        else if (applied && !incomplete(batch, choices)) dialog.close();
       } catch (error) { errorAt(issues, error?.message); }
       finally { saving = false; if (dialog.open) render(); }
     });

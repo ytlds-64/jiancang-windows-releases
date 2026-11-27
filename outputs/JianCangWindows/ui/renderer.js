@@ -249,6 +249,8 @@ const smart = window.createJianCangSmartCollections({ list: byId('smart-collecti
   onChange: () => { renderNavigation(); renderGallery({ animate: false }); },
   notify: showToast, bridge, getLibraries: () => state.libraries,
   recognizedText: asset => visual.record(asset)?.text,
+  getCountScope: smartCollectionCountScope,
+  favorite: asset => favoriteWrites.get(asset.id)?.listed ?? asset.favorite,
   makeRow(item, selected, onSelect, onMenu) {
     const { row, button } = makeNavRow(item.name, item.record ? 'cloud' : 'search', 0, selected, onSelect);
     if (item.record) button.title = `${item.name} · ${item.library.name}同步库`;
@@ -2161,10 +2163,10 @@ function refreshNavigationCounts() {
   }
 }
 
-function membershipIncludes(asset, folder) {
+function membershipIncludes(asset, folder, folders = directories) {
   const visited = new Set();
   for (const id of asset.collectionIds) {
-    for (let current = id; directories.has(current) && !visited.has(current); current = directories.get(current).parentId) {
+    for (let current = id; folders.has(current) && !visited.has(current); current = folders.get(current).parentId) {
       if (current === folder) return true;
       visited.add(current);
     }
@@ -2172,32 +2174,40 @@ function membershipIncludes(asset, folder) {
   return false;
 }
 
-function insideCurrentView(asset, folder) {
-  if (!!asset.trashed !== (section === 'trash')) return false;
+function insideView(asset, viewSection, folderId, folders) {
+  if (!!asset.trashed !== (viewSection === 'trash')) return false;
   if (!asset.trashed && trashWrites.has(asset.id)) return false;
-  if (section === 'stash') return selectionStash.has(asset.id);
-  if (section === 'favorites') return favoriteWrites.get(asset.id)?.listed ?? asset.favorite;
-  if (section === 'unfiled') return !asset.collectionIds.some(id => directories.has(id));
-  if (section === 'untagged') return !asset.tags.length;
-  if (section === 'recent') return recentlyViewed.has(asset.id);
-  if (section !== 'collection') return true;
-  return folder?.sourceLibraryId ? asset.sourceLibraryId === folder.sourceLibraryId : membershipIncludes(asset, collectionId);
+  if (viewSection === 'stash') return selectionStash.has(asset.id);
+  if (viewSection === 'favorites') return favoriteWrites.get(asset.id)?.listed ?? asset.favorite;
+  if (viewSection === 'unfiled') return !asset.collectionIds.some(id => folders.has(id));
+  if (viewSection === 'untagged') return !asset.tags.length;
+  if (viewSection === 'recent') return recentlyViewed.has(asset.id);
+  if (viewSection !== 'collection') return true;
+  const folder = folders.get(folderId);
+  return folder?.sourceLibraryId ? asset.sourceLibraryId === folder.sourceLibraryId : membershipIncludes(asset, folderId, folders);
+}
+
+function smartCollectionCountScope(saved) {
+  const entries = catalogEntries().filter(entry => saved.scopeId === null || entry.libraryId === saved.scopeId);
+  if (!entries.length || entries.reduce((total, entry) => total + entry.library.assets.length, 0) > 10000) return null;
+  const catalog = buildBrowseCatalog(entries, saved.scopeId);
+  const folders = new Map(catalog.collections.map(item => [item.id, item]));
+  if (saved.section === 'collection' && !folders.has(saved.collectionId)) return null;
+  return catalog.assets.filter(asset => insideView(asset, saved.section, saved.collectionId, folders));
 }
 
 function visualScopeAssets() {
-  const folder = directories.get(collectionId);
-  return browseCatalog?.assets.filter(asset => !asset.trashed && insideCurrentView(asset, folder)) || [];
+  return browseCatalog?.assets.filter(asset => !asset.trashed && insideView(asset, section, collectionId, directories)) || [];
 }
 
 function browseAssets() {
   const type = assetFilters.kind;
   const matchesSearch = assetSearch.matcher();
-  const matchesShared = smart.matcher();
-  const folder = directories.get(collectionId);
+  const matchesSmart = smart.matcher();
   const comparison = visual.comparison;
   const matching = browseCatalog.assets.filter(asset => {
-    if (!insideCurrentView(asset, folder) || !visual.matches(asset)) return false;
-    if (matchesShared && !matchesShared(asset)) return false;
+    if (!insideView(asset, section, collectionId, directories) || !visual.matches(asset)) return false;
+    if (matchesSmart && !matchesSmart(asset)) return false;
     if (comparison) return true;
     const kind = asset.extension === 'livp' ? 'image' : asset.kind;
     if (type !== 'all' && kind !== type) return false;
@@ -2370,7 +2380,7 @@ function makeCard(asset, isList) {
   picture.append(glyph(kindIcon(kind)));
   if (kind === 'image' || asset.thumbnailAvailable) mountCardThumbnail(picture, asset, button);
   if (kind === 'audio' && asset.available && window.jiancangTauriPlatform) {
-    audioCardPreview.attach(button, assetURL('original', asset, { playback: true }));
+    audioCardPreview.attach(button, picture, assetURL('original', asset, { playback: true }));
   }
   if (!isList && (isLivePhoto || kind !== 'image' || !asset.available)) {
     picture.append(node('span', 'asset-filetype', isLivePhoto ? 'LIVE' : (asset.extension || labels[kind] || '文件').toUpperCase()));

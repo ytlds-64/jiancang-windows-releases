@@ -9,6 +9,8 @@
   const studio = window.jiancangStudioDocuments;
   const text = (value, size) => typeof value === 'string' ? value.trim().slice(0, size) : '';
   const canonicalName = value => value.normalize('NFKC').toLowerCase();
+  const maximumRules = 24;
+  const dayMs = 86400000;
 
   function criteria(value) {
     if (!value || !sections.has(value.section)) return null;
@@ -43,7 +45,7 @@
         const filter = criteria(item.criteria);
         if (!name || !filter) return [];
         ids.add(item.id);
-        return [{ id: item.id, name, criteria: filter }];
+        return [{ id: item.id, name, criteria: filter, ...storedConditions(item.conditions) }];
       });
     } catch { return []; }
   }
@@ -72,6 +74,108 @@
   const orientations = new Map([['any', '不限'], ['portrait', '竖图'], ['landscape', '横图'], ['square', '方图']]);
   const kindNames = new Map([['', '所有素材'], ['image', '图片'], ['video', '视频'], ['audio', '音频'],
     ['pdf', 'PDF'], ['document', '其他文件'], ['link', '链接']]);
+  const textOperators = [['contains', '包含'], ['equals', '等于'], ['excludes', '不包含']];
+  const numberOperators = [['atLeast', '大于等于'], ['atMost', '小于等于'], ['equals', '等于']];
+  const dateOperators = [['within', '最近几天'], ['atLeast', '在这天或之后'], ['before', '早于']];
+  const setOperators = [['equals', '是'], ['excludes', '不是']];
+  const choices = {
+    name: { label: '素材名称', operators: textOperators },
+    tag: { label: '标签', operators: [['equals', '包含该标签'], ['excludes', '不含该标签'], ['empty', '没有标签']] },
+    kind: { label: '类型', operators: setOperators, options: [...kindNames].slice(1) },
+    extension: { label: '文件格式', operators: setOperators, placeholder: '例如 mp4' },
+    note: { label: '备注', operators: textOperators },
+    rating: { label: '评分', operators: numberOperators, options: ['未评分', '1 星', '2 星', '3 星', '4 星', '5 星'].map((label, index) => [String(index), label]) },
+    favorite: { label: '收藏', operators: [['equals', '状态为']], options: [['yes', '已收藏'], ['no', '未收藏']] },
+    importedAt: { label: '添加日期', operators: dateOperators },
+    duration: { label: '时长（秒）', operators: numberOperators, min: 0, max: 31536000, step: 'any' },
+    byteCount: { label: '大小（MB）', operators: numberOperators, min: 0, max: 10 ** 8, step: 'any' },
+    width: { label: '宽度（像素）', operators: numberOperators, min: 1, max: 100000 },
+    height: { label: '高度（像素）', operators: numberOperators, min: 1, max: 100000 },
+  };
+
+  function ruleValue(field, operator) {
+    const choice = choices[field];
+    if (field !== 'importedAt') return choice;
+    return operator === 'within' ? { min: 1, max: 36500, placeholder: '天数' } : { date: true };
+  }
+
+  function normalizeRule(rule) {
+    if (!rule || !Object.hasOwn(choices, rule.field)) return null;
+    const { field, operator } = rule;
+    if (!choices[field].operators.some(([key]) => key === operator)) return null;
+    if (operator === 'empty') return { field, operator, value: '' };
+    const control = ruleValue(field, operator);
+    let value = text(rule.value, 160);
+    if (field === 'extension') {
+      value = canonicalName(value).replace(/^\./, '');
+      if (!/^[a-z\d]{1,16}$/.test(value)) return null;
+    }
+    if (control.options && !control.options.some(([key]) => key === value)) return null;
+    if (control.min !== undefined && (!value || !Number.isFinite(Number(value)) || Number(value) < control.min ||
+      Number(value) > control.max || (control.step !== 'any' && !Number.isInteger(Number(value))))) return null;
+    if (control.date && (!/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+      !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value)) return null;
+    return value ? { field, operator, value } : null;
+  }
+
+  function storedConditions(value) {
+    if (!Array.isArray(value?.rules)) return {};
+    const rules = value.rules.slice(0, maximumRules).map(normalizeRule).filter(Boolean);
+    return rules.length ? { conditions: { match: value.match === 'any' ? 'any' : 'all', rules } } : {};
+  }
+
+  const stringValue = value => typeof value === 'string' ? canonicalName(value) : '';
+
+  function conditionPredicate({ field, operator, value }, now, favorite) {
+    if (field === 'tag') {
+      if (operator === 'empty') return asset => !asset.tags.length;
+      const expected = canonicalName(value);
+      return asset => asset.tags.some(tag => stringValue(tag) === expected) !== (operator === 'excludes');
+    }
+    if (field === 'favorite') return asset => Boolean(favorite(asset)) === (value === 'yes');
+    if (field === 'importedAt') {
+      const boundary = operator === 'within' ? now - Number(value) * dayMs : Date.parse(`${value}T00:00:00`);
+      return asset => {
+        const time = Date.parse(asset.importedAt);
+        return Number.isFinite(time) && (operator === 'before' ? time < boundary : time >= boundary);
+      };
+    }
+    if (choices[field].operators === numberOperators) {
+      const expected = Number(value) * (field === 'byteCount' ? 1024 ** 2 : 1);
+      return asset => {
+        const actual = field === 'rating' ? asset.rating ?? 0 : asset[field];
+        return Number.isFinite(actual) && (operator === 'equals' ? actual === expected
+          : operator === 'atLeast' ? actual >= expected : actual <= expected);
+      };
+    }
+    const expected = canonicalName(value);
+    return asset => {
+      const actual = field === 'kind' && asset.extension === 'livp' ? 'image' : stringValue(asset[field]);
+      if (operator === 'contains') return actual.includes(expected);
+      if (operator === 'equals') return actual === expected;
+      return choices[field].operators === textOperators ? !actual.includes(expected) : actual !== expected;
+    };
+  }
+
+  function prepareConditions(conditions, favorite) {
+    if (!conditions?.rules.length) return null;
+    const now = Date.now();
+    const predicates = conditions.rules.map(rule => conditionPredicate(rule, now, favorite));
+    return conditions.match === 'any'
+      ? asset => predicates.some(test => test(asset)) : asset => predicates.every(test => test(asset));
+  }
+
+  const scopeFields = ({ section, scopeId, collectionId }) => ({ section, scopeId, collectionId });
+
+  function describeConditions(conditions) {
+    if (!conditions) return [];
+    return [[conditions.match === 'any' ? '任意满足' : '全部满足', conditions.rules.map(({ field, operator, value }) => {
+      const choice = choices[field];
+      const action = choice.operators.find(([key]) => key === operator)[1];
+      const expected = choice.options?.find(([key]) => key === value)?.[1] ?? value;
+      return [choice.label, action, operator === 'within' ? `${expected} 天` : expected].filter(Boolean).join(' ');
+    }).join('；')]];
+  }
 
   function sharedFilterFromCriteria(filter, title = '') {
     if (!filter || !['all', 'untagged', 'favorites'].includes(filter.section) || filter.collectionId
@@ -115,7 +219,8 @@
     return entries;
   }
 
-  window.createJianCangSmartCollections = ({ list, capture, apply, describe, onChange, notify, makeRow, bridge, getLibraries, recognizedText }) => {
+  window.createJianCangSmartCollections = ({ list, capture, apply, describe, onChange, notify, makeRow, bridge, getLibraries,
+    recognizedText, getCountScope, favorite = asset => asset.favorite }) => {
     let items = read();
     let activeId = null;
     let synced = new Map();
@@ -190,7 +295,7 @@
     }
 
     function show(label, children) {
-      dialog.classList.remove('studio-filter-dialog');
+      dialog.classList.remove('studio-filter-dialog', 'smart-rules-dialog');
       title.textContent = label;
       body.replaceChildren(...children);
       if (!dialog.open) dialog.showModal();
@@ -216,28 +321,144 @@
       const details = element('dl', { class: 'smart-summary-details' });
       for (const [key, value] of (Array.isArray(filter) ? filter : describe(filter))) details.append(element('dt', {}, key), element('dd', {}, value));
       const result = element('section', { class: 'smart-summary' });
-      result.append(element('h3', {}, label), details);
+      if (label) result.append(element('h3', {}, label));
+      result.append(details);
       return result;
     }
 
     function edit(item, { copy = false } = {}) {
       const editing = item && !copy;
       if (!editing && items.length >= maximum) { notify('智能集合已满，请先移除一个。'); return; }
-      const filter = item ? item.criteria : criteria(capture());
+      const current = criteria(capture());
+      const filter = item?.criteria ?? current;
       if (!filter) { notify('请进入一个可浏览的素材页再保存。'); return; }
-      const label = element('label', { class: 'intake-field' }, '集合名称');
       const input = element('input', { type: 'text', required: '', maxlength: '80', autocomplete: 'off' });
       input.value = copy ? duplicateName(item.name) : item?.name || filter.query;
-      label.append(input);
+      const owner = filter.scopeId || filter.collectionId?.replace(/^library:/, '').split(':', 1)[0];
+      const allSources = { section: 'all', scopeId: null, collectionId: null };
+      const scopes = [...new Map([filter, current, { ...allSources, scopeId: owner || null }, allSources]
+        .filter(Boolean).map(value => {
+          const scope = scopeFields(value);
+          return [JSON.stringify(scope), scope];
+        })).values()];
+      const scope = select(scopes.map((value, index) => [String(index), describe({ ...filter, ...value })[0][1]]), '0');
+      const identity = element('div', { class: 'smart-identity' });
+      identity.append(labeled('集合名称', input), labeled('查找范围', scope));
+
+      const legacy = describe(filter).slice(1).filter(([label]) => label !== '排序');
+      const retain = element('input', { type: 'checkbox' });
+      retain.checked = true;
+      const inherited = element('div', { class: 'smart-inherited' });
+      const inheritedToggle = element('label', {}, '保留原筛选');
+      inheritedToggle.prepend(retain);
+      inherited.append(inheritedToggle, summary(legacy));
+      inherited.hidden = legacy.length === 0;
+
+      const group = element('fieldset', { class: 'smart-rules' });
+      const mode = select(modes, item?.conditions?.match ?? 'all');
+      const rules = (item?.conditions?.rules ?? []).map(rule => ({ ...rule }));
+      const ruleList = element('div', { class: 'smart-rule-list' });
+      const add = element('button', { type: 'button', class: 'outline-button' }, '添加条件');
+      const result = element('output', { class: 'smart-rule-result', 'aria-live': 'polite' });
+      const tools = element('div', { class: 'smart-rule-tools' });
+      tools.append(add, result);
+      group.append(element('legend', {}, '匹配条件'), labeled('满足方式', mode), ruleList, tools);
+
       const actions = element('div', { class: 'local-intake-actions smart-actions' });
+      const cancel = element('button', { type: 'button', class: 'outline-button' }, '取消');
+      cancel.addEventListener('click', () => dialog.close());
       const submit = element('button', { type: 'submit', class: 'primary-button' }, '保存');
-      actions.append(submit);
+      actions.append(cancel, submit);
       const error = element('p', { class: 'local-intake-error', role: 'status', hidden: '' });
       const form = element('form', { class: 'smart-fields' });
-      form.append(label, summary(filter, item ? '已保存的条件' : '将保存的条件'), error, actions);
+      const countScopes = new Map();
+      let countTimer;
+      function updateCount() {
+        clearTimeout(countTimer);
+        countTimer = setTimeout(() => {
+          if (!dialog.open || !body.contains(form)) return;
+          const normalized = rules.map(normalizeRule);
+          if (normalized.includes(null)) { result.textContent = '请填写完整条件'; return; }
+          if ((legacy.length && retain.checked) || !getCountScope) { result.textContent = ''; return; }
+          if (!countScopes.has(scope.value)) countScopes.set(scope.value, getCountScope(scopes[scope.value]));
+          const assets = countScopes.get(scope.value);
+          const matches = prepareConditions({ match: mode.value, rules: normalized }, favorite);
+          result.textContent = assets ? `匹配 ${(matches ? assets.filter(matches).length : assets.length).toLocaleString()} 份素材` : '';
+        }, 160);
+      }
+
+      function renderRules(focusIndex = -1) {
+        const fields = Object.entries(choices).map(([key, choice]) => [key, choice.label]);
+        const rows = rules.map((rule, index) => {
+          const row = element('div', { class: 'smart-rule' });
+          const field = select(fields, rule.field);
+          const operator = select(choices[rule.field].operators, rule.operator);
+          const valueBox = element('div', { class: 'smart-rule-value' });
+          function renderValue() {
+            valueBox.replaceChildren();
+            if (rule.operator === 'empty') return;
+            const option = ruleValue(rule.field, rule.operator);
+            const value = option.options ? select(option.options, rule.value) : element('input', option.date ? { type: 'date' }
+              : option.min !== undefined ? { type: 'number', min: option.min, max: option.max, step: option.step ?? 1,
+                placeholder: option.placeholder ?? '' }
+                : { type: 'text', maxlength: 160, placeholder: option.placeholder ?? '', autocomplete: 'off' });
+            if (!option.options) value.value = rule.value;
+            else if (value.selectedIndex === -1) value.selectedIndex = 0;
+            rule.value = value.value;
+            value.required = true;
+            value.addEventListener(option.options ? 'change' : 'input', () => { rule.value = value.value; updateCount(); });
+            valueBox.append(labeled('值', value));
+          }
+          field.addEventListener('change', () => {
+            rule.field = field.value;
+            rule.operator = choices[rule.field].operators[0][0];
+            rule.value = '';
+            operator.replaceChildren(...choices[rule.field].operators.map(([key, label]) => element('option', { value: key }, label)));
+            renderValue();
+            updateCount();
+          });
+          operator.addEventListener('change', () => {
+            if (rule.field === 'importedAt' && (rule.operator === 'within') !== (operator.value === 'within')) rule.value = '';
+            rule.operator = operator.value;
+            renderValue();
+            updateCount();
+          });
+          renderValue();
+          const remove = element('button', { type: 'button', class: 'icon-button', 'aria-label': `移除第 ${index + 1} 条条件` }, '×');
+          remove.addEventListener('click', () => {
+            rules.splice(index, 1);
+            renderRules(Math.min(index, rules.length - 1));
+            if (!rules.length) add.focus();
+          });
+          row.append(labeled('字段', field), labeled('比较', operator), valueBox, remove);
+          return row;
+        });
+        ruleList.replaceChildren(...rows);
+        add.disabled = rules.length >= maximumRules;
+        mode.disabled = rules.length < 2;
+        if (focusIndex >= 0) rows[focusIndex].querySelector('select').focus();
+        updateCount();
+      }
+
+      add.addEventListener('click', () => {
+        rules.push({ field: 'name', operator: 'contains', value: '' });
+        renderRules(rules.length - 1);
+      });
+      mode.addEventListener('change', updateCount);
+      scope.addEventListener('change', updateCount);
+      retain.addEventListener('change', () => {
+        inherited.lastElementChild.hidden = !retain.checked;
+        updateCount();
+      });
+      const draftFilter = () => criteria({ ...(retain.checked ? filter : { sort: filter.sort, reverseSort: filter.reverseSort }),
+        ...scopes[scope.value] });
+      form.append(identity, group, inherited, error, actions);
       if (!item && libraries().some(library => library.syncWritable)) {
         const cloud = element('button', { type: 'button', class: 'outline-button' }, '新建同步智能集合…');
-        cloud.addEventListener('click', () => editShared(null, sharedFilterFromCriteria(filter, input.value)));
+        cloud.addEventListener('click', () => {
+          if (rules.length) { notify('请先保存本机条件。同步智能集合可单独设置共用条件。'); return; }
+          editShared(null, sharedFilterFromCriteria(draftFilter(), input.value));
+        });
         actions.prepend(cloud);
       }
       form.addEventListener('submit', event => {
@@ -248,11 +469,18 @@
           error.hidden = false;
           return;
         }
-        const updated = { id: editing ? item.id : crypto.randomUUID(), name, criteria: filter };
+        const normalized = rules.map(normalizeRule);
+        if (normalized.includes(null)) {
+          error.textContent = '请检查条件中的格式、数值或日期。';
+          error.hidden = false;
+          return;
+        }
+        const updated = { id: editing ? item.id : crypto.randomUUID(), name, criteria: draftFilter(),
+          ...storedConditions({ match: mode.value, rules: normalized }) };
         const next = editing ? items.map(row => row.id === item.id ? updated : row) : [...items, updated];
         if (!save(next)) return;
         dialog.close();
-        if (!item) activate(updated);
+        if (!item || (editing && activeId === item.id)) activate(updated);
         else {
           render();
           onChange?.();
@@ -260,15 +488,17 @@
           list.querySelector(`[data-smart-collection-id="${updated.id}"] .navigation-button`)?.focus({ preventScroll: true });
         }
       });
-      show(copy ? '复制智能集合' : item ? '重命名智能集合' : '保存为智能集合', [form]);
+      show(copy ? '复制智能集合' : item ? '编辑智能集合' : '新建智能集合', [form]);
+      dialog.classList.add('smart-rules-dialog');
+      renderRules();
       input.focus();
       input.select();
     }
 
     function menu(item) {
       if (item.record) { sharedMenu(item); return; }
-      const rename = element('button', { type: 'button', class: 'outline-button' }, '重命名');
-      rename.addEventListener('click', () => edit(item));
+      const editAction = element('button', { type: 'button', class: 'outline-button' }, '编辑条件…');
+      editAction.addEventListener('click', () => edit(item));
       const copy = element('button', { type: 'button', class: 'outline-button' }, '复制智能集合');
       copy.disabled = items.length >= maximum;
       copy.addEventListener('click', () => edit(item, { copy: true }));
@@ -285,13 +515,13 @@
         });
         show(`删除「${item.name}」？`, [description, confirm]);
       });
-      const children = [summary(item.criteria, '已保存的条件')];
+      const children = [summary([...describe(item.criteria), ...describeConditions(item.conditions)], '已保存的条件')];
       const actions = element('div', { class: 'local-intake-actions smart-menu-actions' });
-      actions.append(rename, copy);
+      actions.append(editAction, copy);
       if (libraries().some(library => library.syncWritable)) {
         const share = element('button', { type: 'button', class: 'outline-button' }, '复制到同步库…');
         share.addEventListener('click', () => {
-          const filter = sharedFilterFromCriteria(item.criteria, item.name);
+          const filter = !item.conditions && sharedFilterFromCriteria(item.criteria, item.name);
           if (!filter) { notify('此集合包含当前设备独有的条件。请新建同步智能集合并设置共用条件。'); return; }
           editShared(null, filter);
         });
@@ -493,9 +723,11 @@
       render, refresh,
       matcher() {
         const active = synced.get(activeId);
-        if (!active) return null;
-        const matches = studio.prepareFilter(active.filter);
-        return asset => matches(asset, () => recognizedText?.(asset) ?? '');
+        if (active) {
+          const matches = studio.prepareFilter(active.filter);
+          return asset => matches(asset, () => recognizedText?.(asset) ?? '');
+        }
+        return prepareConditions(items.find(item => item.id === activeId)?.conditions, favorite);
       },
       clear() { if (activeId) { activeId = null; render(); } },
       restoreActive(id) {

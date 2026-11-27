@@ -6,12 +6,14 @@ const { createHash, randomUUID } = require('node:crypto');
 const http = require('node:http');
 const https = require('node:https');
 const { Readable } = require('node:stream');
+const { DatabaseSync } = require('node:sqlite');
 const { openContainedFile, readStableBytes } = require('./original-file.cjs');
 
-const maximumSuggestions = 40;
 const maximumImageBytes = 3 * 1024 * 1024;
 const maximumResponseBytes = 128 * 1024;
-const maximumCheckpointBytes = 8 * 1024 * 1024;
+const maximumCheckpointBytes = 64 * 1024 * 1024;
+const incrementalCheckpointThreshold = 128;
+const stageSize = 300;
 const compatibleProvider = 'compatible';
 const localProvider = 'lmstudio';
 const localEndpoint = 'http://127.0.0.1:1234/v1';
@@ -171,7 +173,7 @@ function restoreTask(task, stopped) {
   const { id, registrationId } = task.reference;
   const state = unfinished(task) ? (stopped ? 'cancelled' : 'waiting') : task.state;
   const result = { reference: { id, registrationId }, taskId: task.taskId, state, name: task.name, writable: false,
-    suggestion: null, applied: [], pending: false, error: typeof task.error === 'string' ? task.error : '', applyError: '' };
+    suggestion: null, applied: [], pending: false, error: state === 'cancelled' ? '已停止' : typeof task.error === 'string' ? task.error : '', applyError: '' };
   if (state !== 'ready') return result;
   const { original, revision, suggestion, applied } = task;
   if (typeof revision !== 'string' || typeof original?.name !== 'string' || typeof original.note !== 'string' ||
@@ -192,15 +194,37 @@ function restoreTask(task, stopped) {
 function restoreBatch(stored) {
   if (stored?.version !== 1 || typeof stored.id !== 'string' || !uuid.test(stored.id) ||
       typeof stored.profile !== 'string' || !assetID.test(stored.profile) ||
-      !Array.isArray(stored.tasks) || !stored.tasks.length || stored.tasks.length > maximumSuggestions ||
+      !Array.isArray(stored.tasks) || !stored.tasks.length ||
       ![compatibleProvider, localProvider].includes(stored.provider) || typeof stored.label !== 'string') return null;
   const stopped = stored.stopped === true;
   const tasks = stored.tasks.map(task => restoreTask(task, stopped));
   if (new Set(tasks.map(task => task.taskId)).size !== tasks.length ||
       new Set(tasks.map(({ reference }) => `${reference.registrationId}:${reference.id}`)).size !== tasks.length) return null;
   const status = stopped ? 'stopped' : tasks.some(unfinished) ? 'paused' : 'active';
-  return { id: stored.id, profile: stored.profile, provider: stored.provider, model: parseModel(stored.model),
-    label: stored.label, tasks, status, controller: new AbortController() };
+  return indexBatch({ id: stored.id, profile: stored.profile, provider: stored.provider, model: parseModel(stored.model),
+    label: stored.label, tasks, status, controller: new AbortController(), journal: stored.journal });
+}
+
+function indexBatch(batch) {
+  batch.taskById = new Map(batch.tasks.map((task, index) => { task.index = index; return [task.taskId, task]; }));
+  batch.nextWaiting = 0;
+  return batch;
+}
+
+function checkpointTask({ reference, taskId, state, name, revision, original, titleNeedsSuggestion, suggestion,
+  applied, pending, error, applyError, applyFailures, imageDigest }) {
+  return { reference, taskId, state, name, revision, original, titleNeedsSuggestion, suggestion,
+    applied, pending, error, applyError, applyFailures, imageDigest };
+}
+
+function reviewOriginal(original, titleNeedsSuggestion, suggestion, compact) {
+  if (!original) return original;
+  if (!compact) return { ...structuredClone(original), titleNeedsSuggestion };
+  const proposed = new Set(suggestion?.tags?.map(tag => tag.toLowerCase()));
+  return { name: original.name, titleNeedsSuggestion,
+    tags: original.tags.filter(tag => proposed.has(tag.toLowerCase())),
+    hasTags: original.tags.some(tag => tag.trim()), hasNote: Boolean(original.note.trim()),
+    noteAvailable: Boolean(original.note) };
 }
 
 function cleanSuggestionText(input, limit, multiline = false) {
@@ -389,9 +413,11 @@ class AssetSuggestions {
   #applying = false;
   #work = new Map();
   #checkpoint = Promise.resolve();
+  #progressDB;
+  #submission;
   #closing = false;
 
-  constructor({ settingsFile, safeStorage, getAsset, getImage, apply, onChange } = {}) {
+  constructor({ settingsFile, safeStorage, getAsset, getImage, apply, onChange, snapshotChanges = true, compactOriginals = false } = {}) {
     if (!path.isAbsolute(settingsFile ?? '') || typeof getAsset !== 'function' || typeof getImage !== 'function' ||
         typeof apply !== 'function') throw new TypeError('缺少 AI 整理配置。');
     this.settingsFile = settingsFile;
@@ -401,6 +427,8 @@ class AssetSuggestions {
     this.getImage = getImage;
     this.apply = apply;
     this.onChange = onChange;
+    this.snapshotChanges = snapshotChanges;
+    this.compactOriginals = compactOriginals;
   }
 
   async initialize() {
@@ -411,7 +439,19 @@ class AssetSuggestions {
       const handle = await openContainedFile(directory, file);
       try {
         const bytes = await readStableBytes(handle, (await handle.stat()).size, maximumCheckpointBytes);
-        if (bytes) this.#batch = restoreBatch(JSON.parse(bytes.toString('utf8')));
+        if (!bytes) return;
+        const stored = JSON.parse(bytes.toString('utf8'));
+        if (typeof stored.journal === 'string' && uuid.test(stored.journal) && Array.isArray(stored.tasks)) {
+          const database = await this.#openProgressDB(directory);
+          const rows = database.prepare('SELECT task_id, state FROM progress WHERE journal = ?').iterate(stored.journal);
+          const updates = new Map(stored.tasks.map(task => [task.taskId, task]));
+          for (const row of rows) {
+            if (row.task_id === '') stored.stopped = row.state === 'stopped';
+            else if (updates.has(row.task_id)) updates.set(row.task_id, JSON.parse(row.state));
+          }
+          stored.tasks = [...updates.values()];
+        } else delete stored.journal;
+        this.#batch = restoreBatch(stored);
       } finally { await handle.close(); }
     } catch { /* Missing and invalid checkpoints do not affect AI settings. */ }
   }
@@ -544,19 +584,27 @@ class AssetSuggestions {
     }
   }
 
-  getBatch() {
+  getBatch(offset = 0, limit) {
     const batch = this.#batch;
     if (!batch) return null;
     const paused = batch.status === 'paused' && batch.tasks.some(unfinished);
     return { id: batch.id, model: batch.model, label: batch.label, applying: this.#applying, stopped: batch.status === 'stopped',
       paused, canResume: paused && profileFingerprint(this.getSettings()) === batch.profile,
       checkpointFailed: Boolean(batch.checkpointFailed),
-      tasks: batch.tasks.map(({ reference, taskId, state, name, writable, writeBlock, original, titleNeedsSuggestion, suggestion, applied, pending, error, applyError }) => {
+      ...(limit && batch.tasks.length > limit ? { totalTasks: batch.tasks.length } : {}),
+      tasks: (limit ? batch.tasks.slice(offset, offset + limit) : batch.tasks).map(({ reference, taskId, state, name, writable,
+        writeBlock, original, titleNeedsSuggestion, suggestion, applied, pending, error, applyError }) => {
         const running = this.#work.has(taskId);
         return { ...reference, taskId, state: running ? 'running' : state, name, writable, writeBlock,
-          original: original && { ...structuredClone(original), titleNeedsSuggestion },
+          original: reviewOriginal(original, titleNeedsSuggestion, suggestion, this.compactOriginals),
           suggestion: running ? null : structuredClone(suggestion), applied: [...applied], pending, error: running ? '' : error, applyError };
       }) };
+  }
+
+  originalNote(taskId) {
+    const task = this.#batch?.taskById.get(taskId);
+    if (task?.state !== 'ready' || !task.original) throw new Error('这个建议的原备注暂不可用。');
+    return task.original.note;
   }
 
   async review() {
@@ -564,18 +612,22 @@ class AssetSuggestions {
     const batch = this.#batch;
     if (!batch || this.#applying) return this.getBatch();
     const tasks = batch.tasks.filter(task => remainingFields(task).length);
-    const current = await Promise.all(tasks.map(task => this.#accessForSuggestion(task)));
+    const current = [];
+    for (let index = 0; index < tasks.length; index += 4) {
+      current.push(...await Promise.all(tasks.slice(index, index + 4).map(task => this.#accessForSuggestion(task))));
+      if (this.#batch !== batch || this.#applying) return this.getBatch();
+    }
     if (this.#batch !== batch || this.#applying) return this.getBatch();
-    let changedRevision = false;
+    const changed = [];
     for (let index = 0; index < tasks.length; index++) {
       const task = tasks[index];
       const access = current[index];
       if (!remainingFields(task).length || task.revision !== access.previousRevision) continue;
       task.writeBlock = access.block;
       task.writable = !task.writeBlock;
-      if (task.revision !== access.revision) { task.revision = access.revision; changedRevision = true; }
+      if (task.revision !== access.revision) { task.revision = access.revision; changed.push(task); }
     }
-    if (changedRevision) await this.#saveProgress(batch);
+    if (changed.length) await this.#saveProgress(batch, changed);
     return this.getBatch();
   }
 
@@ -598,55 +650,101 @@ class AssetSuggestions {
   }
 
   #notify() {
-    try { this.onChange?.(this.getBatch()); } catch { /* Notification is optional. */ }
+    try { this.onChange?.(this.snapshotChanges ? this.getBatch() : undefined); } catch { /* Notification is optional. */ }
   }
 
-  async #writeCheckpoint(batch) {
-    const document = batch && { version: 1, id: batch.id, provider: batch.provider, model: batch.model, label: batch.label,
-      profile: batch.profile, stopped: batch.status === 'stopped',
-      tasks: batch.tasks.map(({ reference, taskId, state, name, revision, original, titleNeedsSuggestion, suggestion, applied, pending,
-        error, applyError, applyFailures, imageDigest }) =>
-        ({ reference, taskId, state, name, revision, original, titleNeedsSuggestion, suggestion, applied, pending,
-          error, applyError, applyFailures, imageDigest })) };
-    const bytes = document && JSON.stringify(document);
+  async #openProgressDB(root) {
+    if (this.#progressDB) return this.#progressDB;
+    const location = path.join(root, 'asset-suggestions-progress.sqlite3');
+    const created = await fs.open(location, 'wx', 0o600).catch(error => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+    await created?.close();
+    if (!(await fs.lstat(location)).isFile()) throw new Error('AI 整理进度位置无效。');
+    this.#progressDB = new DatabaseSync(location);
+    this.#progressDB.exec(`CREATE TABLE IF NOT EXISTS progress (
+      journal TEXT NOT NULL, task_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (journal, task_id)
+    )`);
+    return this.#progressDB;
+  }
+
+  async #writeCheckpoint(batch, changed) {
+    const incremental = batch?.journal && changed;
+    const stopped = batch?.status === 'stopped';
+    const rows = incremental && changed.map(task => [task.taskId, JSON.stringify(checkpointTask(task))]);
+    const journal = batch?.tasks.length > incrementalCheckpointThreshold ? batch.journal ?? randomUUID() : undefined;
+    const bytes = batch && !incremental && JSON.stringify({ version: 1, id: batch.id, provider: batch.provider, model: batch.model,
+      label: batch.label, profile: batch.profile, stopped, journal, tasks: batch.tasks.map(checkpointTask) });
     const write = this.#checkpoint.then(async () => {
       if (bytes && Buffer.byteLength(bytes) > maximumCheckpointBytes) throw new Error('AI 整理进度过大。');
       const root = await fs.realpath(path.dirname(this.batchFile));
+      const database = journal ? await this.#openProgressDB(root) : this.#progressDB;
+      if (incremental) {
+        database.exec('BEGIN IMMEDIATE');
+        try {
+          const upsert = database.prepare('INSERT OR REPLACE INTO progress VALUES (?, ?, ?)');
+          upsert.run(journal, '', stopped ? 'stopped' : 'active');
+          for (const row of rows) upsert.run(journal, ...row);
+          database.exec('COMMIT');
+        } catch (error) { database.exec('ROLLBACK'); throw error; }
+        return;
+      }
       const target = path.join(root, path.basename(this.batchFile));
-      if (!bytes) { await fs.rm(target, { force: true }); return; }
+      if (!bytes) { await fs.rm(target, { force: true }); database?.exec('DELETE FROM progress'); return; }
       const temporary = path.join(root, `.ai-batch-${randomUUID()}`);
       try {
         await fs.writeFile(temporary, bytes, { flag: 'wx', mode: 0o600, flush: true });
         await fs.rename(temporary, target);
       } finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+      batch.journal = journal;
+      database?.prepare('DELETE FROM progress WHERE journal <> ?').run(journal ?? '');
     });
     this.#checkpoint = write.catch(() => {});
     try { await write; }
     catch { throw new Error('无法保存 AI 整理进度，请检查本机存储。'); }
   }
 
-  async #saveProgress(batch) {
+  async #saveProgress(batch, changed = []) {
     if (this.#batch !== batch) return;
-    try { await this.#writeCheckpoint(batch); batch.checkpointFailed = false; }
+    try { await this.#writeCheckpoint(batch, changed); batch.checkpointFailed = false; }
     catch { batch.checkpointFailed = true; }
   }
 
-  async start(references) {
+  async start(input) {
     if (this.#closing || this.#starting || this.#work.size || this.#saving || this.#applying) throw new Error('请等当前 AI 整理任务结束。');
     if (this.#batch?.status === 'paused' && this.#batch.tasks.some(unfinished)) throw new Error('请继续或取消已暂停的整理任务。');
-    if (!Array.isArray(references) || !references.length || references.length > maximumSuggestions || !references.every(validReference)) {
-      throw new Error(`请选择 1 到 ${maximumSuggestions} 张图片。`);
+    let unique;
+    if (Array.isArray(input)) {
+      if (!input.length || !input.every(validReference)) throw new Error('请选择有效的图片。');
+      this.#submission = null;
+      unique = new Map(input.map(({ registrationId, id }) => [`${registrationId}:${id}`, { registrationId, id }]));
+    } else {
+      const { uploadId, offset, items, final } = input ?? {};
+      if (typeof uploadId !== 'string' || !uuid.test(uploadId) || !Number.isSafeInteger(offset) || offset < 0 ||
+          !Array.isArray(items) || !items.length || items.length > stageSize || !items.every(validReference)) {
+        throw new Error('所选图片列表无效，请重新生成。');
+      }
+      if (offset === 0) this.#submission = { id: uploadId, received: 0, updated: Date.now(), unique: new Map() };
+      const submission = this.#submission;
+      if (submission?.id !== uploadId || submission.received !== offset || Date.now() - submission.updated > 60_000) {
+        throw new Error('所选图片列表已变化，请重新生成。');
+      }
+      for (const { registrationId, id } of items) submission.unique.set(`${registrationId}:${id}`, { registrationId, id });
+      submission.received += items.length;
+      submission.updated = Date.now();
+      if (final !== true) return { received: submission.received };
+      unique = submission.unique;
+      this.#submission = null;
     }
     this.#starting = true;
     try {
       const config = await this.#apiConfig();
-      const unique = new Map(references.map(({ registrationId, id }) => [`${registrationId}:${id}`, { registrationId, id }]));
-      const batch = { id: randomUUID(), provider: config.provider, profile: profileFingerprint(config), model: config.model,
+      const batch = indexBatch({ id: randomUUID(), provider: config.provider, profile: profileFingerprint(config), model: config.model,
         label: publicProfile(config.provider, { endpoint: config.endpoint }).label,
         status: 'active', controller: new AbortController(), tasks: [...unique.values()].map(reference => ({
           reference, taskId: randomUUID(), state: 'waiting', name: '准备图片', writable: false,
           suggestion: null, applied: [], pending: false, error: '', applyError: '',
-        })) };
+        })) });
       await this.#writeCheckpoint(batch);
       this.#batch = batch;
       this.#pump(batch, config);
@@ -656,11 +754,12 @@ class AssetSuggestions {
 
   #pump(batch, config) {
     if (this.#closing || batch.status !== 'active' || this.#batch !== batch) return;
-    for (const task of batch.tasks) {
-      if (this.#work.size >= (config.provider === localProvider ? 1 : 2)) break;
+    const concurrency = config.provider === localProvider ? 1 : 2;
+    while (batch.nextWaiting < batch.tasks.length && this.#work.size < concurrency) {
+      const task = batch.tasks[batch.nextWaiting++];
       if (task.state !== 'waiting') continue;
       task.state = 'running';
-      const generation = this.#generate(batch, task, config).then(() => this.#saveProgress(batch)).finally(() => {
+      const generation = this.#generate(batch, task, config).then(() => this.#saveProgress(batch, [task])).finally(() => {
         this.#work.delete(task.taskId);
         if (batch.status === 'active') this.#pump(batch, config);
         else this.#notify();
@@ -693,7 +792,11 @@ class AssetSuggestions {
       task.writable = !task.writeBlock;
       task.state = 'ready';
     } catch (error) {
-      if (batch.status === 'paused') { task.state = 'waiting'; task.error = ''; return; }
+      if (batch.status === 'paused') {
+        task.state = 'waiting'; task.error = '';
+        batch.nextWaiting = Math.min(batch.nextWaiting, task.index);
+        return;
+      }
       const stopped = batch.controller.signal.aborted;
       task.state = stopped ? 'cancelled' : 'failed';
       task.error = stopped ? '已停止' : signal.aborted ? '视觉模型响应超时，请重试。' : (error?.message || '生成失败，请重试。');
@@ -702,7 +805,7 @@ class AssetSuggestions {
 
   async retry(taskId) {
     const batch = this.#batch;
-    const task = batch?.tasks.find(item => item.taskId === taskId);
+    const task = batch?.taskById.get(taskId);
     return this.#retryTasks(batch, task ? [task] : [], '这项建议当前无法重试。');
   }
 
@@ -726,9 +829,10 @@ class AssetSuggestions {
       for (const task of failed) {
         task.state = 'waiting';
         task.error = '';
+        batch.nextWaiting = Math.min(batch.nextWaiting, task.index);
       }
       this.#pump(batch, config);
-      await this.#saveProgress(batch);
+      await this.#saveProgress(batch, failed);
       return this.getBatch();
     } finally { this.#starting = false; }
   }
@@ -767,7 +871,7 @@ class AssetSuggestions {
     try {
       if (profileFingerprint(this.getSettings()) !== batch.profile) throw new Error('AI 服务配置已变化，请切回原服务后继续。');
       const config = await this.#apiConfig();
-      await this.#writeCheckpoint(batch);
+      await this.#writeCheckpoint(batch, []);
       batch.checkpointFailed = false;
       batch.controller = new AbortController();
       batch.status = 'active';
@@ -809,16 +913,18 @@ class AssetSuggestions {
     this.#pauseWork(this.#batch, '见藏正在退出。');
     await Promise.allSettled(this.#work.values());
     await this.#checkpoint;
+    this.#progressDB?.close();
+    this.#progressDB = undefined;
   }
 
   async applySelected(selection) {
     const batch = this.#batch;
-    if (!batch || this.#applying || this.#starting || !Array.isArray(selection) || !selection.length || selection.length > maximumSuggestions) {
+    if (!batch || this.#applying || this.#starting || !Array.isArray(selection) || !selection.length) {
       throw new Error('请先勾选需要应用的建议。');
     }
     const seen = new Set();
     const plans = selection.map(row => {
-      const task = batch.tasks.find(item => item.taskId === row?.taskId);
+      const task = batch.taskById.get(row?.taskId);
       const fillMissing = row?.fillMissing === undefined ? [] : row.fillMissing;
       if (!task || task.state !== 'ready' || this.#work.has(task.taskId) || seen.has(task.taskId) ||
           !Array.isArray(row.fields) || !row.fields.length || row.fields.length > fields.size ||
@@ -832,7 +938,9 @@ class AssetSuggestions {
     });
     this.#applying = true;
     this.#notify();
-    const undoGroup = `suggestions:${randomUUID()}`;
+    const operation = selection[0].operation;
+    const undoGroup = `suggestions:${typeof operation === 'string' && uuid.test(operation) &&
+      selection.every(row => row.operation === operation) ? operation : randomUUID()}`;
     let applied = 0;
     try {
       for (const { task, keys, patch, fillMissing } of plans) {
@@ -871,11 +979,11 @@ class AssetSuggestions {
           task.applyError = error?.message || '应用建议失败，请重试。';
         }
         task.applyFailures = [...failures];
-        await this.#saveProgress(batch);
+        await this.#saveProgress(batch, [task]);
       }
     } finally { this.#applying = false; this.#notify(); }
     return { applied, failed: plans.length - applied, batch: this.getBatch() };
   }
 }
 
-module.exports = { AssetSuggestions, maximumSuggestions };
+module.exports = { AssetSuggestions };

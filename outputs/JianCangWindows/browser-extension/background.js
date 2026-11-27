@@ -7,6 +7,9 @@ const optionsPage = chrome.runtime.getURL('options.html');
 const audioPage = 'capture-audio.html';
 const automaticId = 'jiancang-image-drag';
 const updateAlarm = 'jiancang-bundled-extension';
+const usageKey = 'captureDestinationUsage';
+const destinationHistoryLimit = 2048;
+const captureReceiptLimit = 512;
 let activeCaptures = 0;
 let checkingBundledUpdate = false;
 let badgeTimer;
@@ -15,6 +18,7 @@ let automaticRegistration = Promise.resolve();
 let cachedTargets;
 let targetRequest;
 let captureSounds = Promise.resolve();
+let captureUsageWrites = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
@@ -234,6 +238,55 @@ async function collectorTargets(connect, allowCache) {
   return targetRequest;
 }
 
+function destinationKey({ targetId, libraryId, collectionId }) {
+  return JSON.stringify([targetId, libraryId, collectionId]);
+}
+
+async function readCaptureUsage() {
+  const { [usageKey]: saved } = await chrome.storage.local.get(usageKey);
+  const records = Array.isArray(saved?.destinations) ? saved.destinations : [];
+  const destinations = new Map(records.filter(entry => Array.isArray(entry) && typeof entry[0] === 'string' &&
+    Array.isArray(entry[1]) && entry[1].length === 2 && entry[1].every(Number.isSafeInteger)));
+  return { destinations, receipts: Array.isArray(saved?.receipts) ? saved.receipts : [] };
+}
+
+async function rankedCollectorTargets(connect, allowCache) {
+  const result = await collectorTargets(connect, allowCache);
+  try {
+    await captureUsageWrites;
+    const { destinations } = await readCaptureUsage();
+    if (!destinations.size) return result;
+    const none = [0, 0];
+    const libraries = result.libraries.map(library => {
+      const ranked = library.collections.map(collection => ({ collection,
+        usage: destinations.get(destinationKey({ ...library, collectionId: collection.id })) ?? none }));
+      ranked.sort((left, right) => right.usage[0] - left.usage[0] || right.usage[1] - left.usage[1]);
+      return { ...library, collections: ranked.map(({ collection }) => collection) };
+    });
+    return { ...result, libraries };
+  } catch { return result; }
+}
+
+function rememberCaptureDestination({ target }, requestId) {
+  if (!target.collectionId) return Promise.resolve();
+  captureUsageWrites = captureUsageWrites.then(async () => {
+    const { destinations, receipts } = await readCaptureUsage();
+    if (receipts.includes(requestId)) return;
+    const key = destinationKey(target);
+    const count = destinations.get(key)?.[0] ?? 0;
+    const recent = [...destinations.values()].at(-1)?.[1] ?? 0;
+    destinations.delete(key);
+    destinations.set(key, [Math.min(Number.MAX_SAFE_INTEGER, count + 1), Math.max(Date.now(), recent + 1)]);
+    await chrome.storage.local.set({ [usageKey]: {
+      destinations: [...destinations].slice(-destinationHistoryLimit),
+      receipts: [...receipts.slice(1 - captureReceiptLimit), requestId],
+    } });
+  }).catch(() => {
+    // The confirmed capture is still successful if local history cannot be saved.
+  });
+  return captureUsageWrites;
+}
+
 // Executed in the clicked document. Same-origin reads can reuse that site's login.
 async function readBrowserImage(rawURL) {
   const url = new URL(rawURL, document.baseURI);
@@ -300,6 +353,12 @@ async function waitForCapture(result, payload) {
   return result;
 }
 
+async function finishCapture(result, requestId, quiet) {
+  await rememberCaptureDestination(result, requestId);
+  if (!quiet) await announceCapture(result, requestId);
+  return result;
+}
+
 async function capture(payload, clicked, { quick = true, retry = false, quiet = false } = {}) {
   activeCaptures++;
   try {
@@ -311,8 +370,7 @@ async function capture(payload, clicked, { quick = true, retry = false, quiet = 
         if (![404, 409].includes(error.status)) throw error;
       });
       if (result?.assetId && result.target && !result.pending) {
-        if (!quiet) await announceCapture(result, payload.requestId);
-        return result;
+        return await finishCapture(result, payload.requestId, quiet);
       }
     }
     if (payload.kind === 'image' && clicked) {
@@ -327,8 +385,7 @@ async function capture(payload, clicked, { quick = true, retry = false, quiet = 
       throw new Error('当前内容无法采集，请打开网页后重试。');
     }
     const result = await waitForCapture(await post('capture', payload), payload);
-    if (!quiet) await announceCapture(result, payload.requestId);
-    return result;
+    return await finishCapture(result, payload.requestId, quiet);
   } catch (error) {
     if (quick) await announce(false, error.message || '采集未完成，请重试。');
     return { ok: false, message: error.message || '采集未完成，请重试。', status: error.status };
@@ -368,7 +425,7 @@ function browserMessage(message, sender) {
     case 'jiancang:collector-options':
       return chrome.runtime.openOptionsPage().then(() => ({ ok: true }));
     case 'jiancang:collector-targets':
-      return collectorTargets(message.connect === true, message.allowCache === true);
+      return rankedCollectorTargets(message.connect === true, message.allowCache === true);
     case 'jiancang:collector-route': {
       const kind = message.kind === 'image' ? 'image' : 'page';
       return post('route', { kind, url: kind === 'image' ? httpURL(message.url) : pageURL,

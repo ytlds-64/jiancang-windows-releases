@@ -1,5 +1,28 @@
 .smart-collection-dialog { width: min(90vw, 400px); }
 .smart-fields { display: grid; gap: 12px; }
+.smart-rules-dialog { width: min(92vw, 665px); }
+.smart-identity { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 5fr); gap: 10px; }
+.smart-rules { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 7px; }
+.smart-rules legend { padding: 0 5px; color: var(--ink); font-weight: 620; }
+.smart-rules > .intake-field { max-width: 175px; }
+.smart-rule-list { display: grid; gap: 9px; }
+.smart-rule-list:empty { display: none; }
+.smart-rule { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.35fr) 32px; align-items: end; gap: 7px; }
+.smart-rule > .icon-button { grid-column: 4; grid-row: 1; height: 36px; min-width: 32px; padding: 0; font-size: 17px; }
+.smart-rule-value { min-width: 0; }
+.smart-rule-tools { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.smart-rule-result { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.smart-inherited > label { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.smart-inherited input { accent-color: var(--accent); }
+.smart-rules-dialog .smart-actions { padding-top: 10px; border-top: 1px solid var(--line); }
+.smart-rules-dialog .smart-actions > :first-child:nth-last-child(3) { margin-right: auto; }
+@media (max-width: 515px) {
+  .smart-identity { grid-template-columns: minmax(0, 1fr); }
+  .smart-rule { grid-template-columns: repeat(2, minmax(0, 1fr)) 32px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .smart-rule-value { grid-column: 1 / 3; }
+  .smart-rule-value:empty { display: none; }
+  .smart-rule > .icon-button { grid-column: 3; }
+}
 .studio-filter-dialog { width: min(92vw, 665px); }
 .studio-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .studio-filter-toggles { display: flex; flex-wrap: wrap; gap: 12px; }

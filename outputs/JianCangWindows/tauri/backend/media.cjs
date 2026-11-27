@@ -107,10 +107,10 @@ async function audioWaveform(ffmpeg, file, signal) {
   return bytes;
 }
 
-function boundedToolOutput(tool, args, signal, limit, stdin = 'ignore') {
+function boundedToolOutput(tool, args, signal, limit, stdin = 'ignore', onStderr) {
   return new Promise((resolve, reject) => {
     const child = spawn(tool, args, {
-      stdio: [stdin, 'pipe', 'ignore'], signal, windowsHide: true,
+      stdio: [stdin, 'pipe', onStderr ? 'pipe' : 'ignore'], signal, windowsHide: true,
     });
     let count = 0;
     const chunks = [];
@@ -120,6 +120,8 @@ function boundedToolOutput(tool, args, signal, limit, stdin = 'ignore') {
       if (count > limit) child.kill();
       else chunks.push(chunk);
     });
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', onStderr);
     child.once('error', error => { clearTimeout(timer); reject(error); });
     child.once('close', code => {
       clearTimeout(timer);
@@ -164,55 +166,76 @@ async function thumbnailFrame(ffmpeg, file, signal, edge, heif, stdin = 'ignore'
   return bytes;
 }
 
-async function sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack, stdin = 'ignore') {
-  const seek = seconds > 0 ? ['-ss', seconds.toFixed(3)] : [];
+async function sampleVideoFrame(ffmpeg, input, signal, seconds, detectBlack, stdin = 'ignore') {
+  const seek = seconds > 0 ? ['-ss', seconds.toFixed(6)] : [];
   const scale = 'scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2';
-  const filter = skipBlack
-    ? `${scale},format=yuv420p,blackframe=amount=0:threshold=24,metadata=mode=select:key=lavfi.blackframe.pblack:function=less:value=98`
-    : scale;
-  const bytes = await boundedToolOutput(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin',
+  const filter = detectBlack ? `${scale},format=yuv420p,blackframe=amount=98:threshold=24` : scale;
+  let black = false;
+  let remainder = '';
+  const readBlackFrame = detectBlack ? chunk => {
+    const lines = (remainder + chunk).split(/\r?\n/);
+    remainder = lines.pop().slice(-512);
+    black ||= lines.some(line => /^\[Parsed_blackframe_\d+ @ [^\]]+\]\s+frame:0\s+pblack:\d+\b/.test(line));
+  } : undefined;
+  // FFmpeg can filter one frame ahead of the encoder. Only frame zero decides
+  // whether to seek, and the first JPEG remains available as a fallback.
+  const bytes = await boundedToolOutput(ffmpeg, ['-hide_banner', '-loglevel', detectBlack ? 'info' : 'error', '-nostats', '-nostdin',
     '-protocol_whitelist', stdin === 'ignore' ? 'file' : 'fd', '-format_whitelist', videoThumbnailDemuxers,
     ...toolInputLimits, '-filter_threads', '1', ...seek, '-t', '2', '-i', input, '-map', '0:V:0', '-an', '-vf', filter,
-    '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-threads', '1', 'pipe:1'], signal, thumbnailBytes, stdin);
+    '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-threads', '1', 'pipe:1'], signal, thumbnailBytes, stdin, readBlackFrame);
   if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error('视频封面格式无效。');
-  return bytes;
+  return { bytes, black };
 }
 
-async function choosePosterFrame(duration, sample, signal, fromStart = false) {
-  const known = Number.isFinite(duration) && duration > 0;
-  const first = known ? Math.min(8, duration * .12) : fromStart ? 0 : 2;
-  const second = known ? Math.min(24, duration * .35) : fromStart ? 2 : 8;
-  const positions = second > first + .75 ? [first, second] : [first];
-  for (const seconds of positions) {
-    try { return await sample(seconds, true); }
-    catch { signal.throwIfAborted(); }
+async function probePosterDuration(ffmpeg, input, stdin, signal) {
+  const ffprobe = path.join(path.dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+  const executable = await fs.lstat(ffprobe);
+  if (!executable.isFile() || executable.isSymbolicLink()) return null;
+  const protocol = stdin === 'ignore' ? 'file' : await toolInputProtocol(ffprobe);
+  const target = protocol === 'pipe' ? 'pipe:0' : input;
+  const output = await boundedToolOutput(ffprobe, ['-v', 'error', '-nofind_stream_info',
+    '-protocol_whitelist', protocol, '-format_whitelist', videoThumbnailDemuxers, ...toolInputLimits,
+    '-select_streams', 'V:0', '-show_entries', 'format=duration:stream=duration', '-of', 'json', target], signal, 16 * 1024, stdin);
+  const { streams, format } = JSON.parse(output.toString('utf8'));
+  return [streams?.[0]?.duration, format?.duration].map(Number).find(value => Number.isFinite(value) && value > 0);
+}
+
+async function choosePosterFrame(ffmpeg, duration, signal, withInput) {
+  const sample = (seconds, detectBlack) => withInput((file, fd) => sampleVideoFrame(ffmpeg, file, signal, seconds, detectBlack, fd));
+  const first = await sample(0, true);
+  if (!first.black) return first.bytes;
+  try {
+    const length = Number.isFinite(duration) && duration > 0 ? duration
+      : await withInput((file, fd) => probePosterDuration(ffmpeg, file, fd, signal));
+    if (length) return (await sample(length / 2, false)).bytes;
+  } catch {
+    signal.throwIfAborted();
   }
-  return sample(0, false);
+  return first.bytes;
 }
 
 async function videoPoster(ffmpeg, original, shutdown) {
   const { library, asset, file, candidates } = original;
   const signal = AbortSignal.any([shutdown, AbortSignal.timeout(18_000)]);
   if (await toolInputProtocol(ffmpeg) === 'fd') {
-    return choosePosterFrame(asset.duration, async (seconds, skipBlack) => {
+    return choosePosterFrame(ffmpeg, asset.duration, signal, async read => {
       // Like video metadata and playback, resolve only a contained, validated
       // original. The inherited handle also avoids staging large videos.
       const { handle } = await openAsset(original, signal);
       try {
         const before = await handle.stat({ bigint: true });
-        const bytes = await sampleVideoFrame(ffmpeg, 'fd:', signal, seconds, skipBlack, handle.fd);
+        const result = await read('fd:', handle.fd);
         const after = await handle.stat({ bigint: true });
         if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
           throw new Error('原件已变化，请重新读取。');
         }
-        return bytes;
+        return result;
       } finally { await handle.close(); }
-    }, signal);
+    });
   }
   // Keep old FFmpeg versions working within their original staging limit.
   if (asset.byteCount > legacyVideoStagingLimit) return null;
-  const decode = input => choosePosterFrame(asset.duration,
-    (seconds, skipBlack) => sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack), signal);
+  const decode = input => choosePosterFrame(ffmpeg, asset.duration, signal, read => read(input, 'ignore'));
   const folder = fileDirectory(library);
   return folder ? withReadOnlyThumbnailFile(folder, file, asset.byteCount, signal, decode)
     : withVerifiedThumbnailFile(library.root, candidates || [file], asset, signal, decode);
@@ -242,17 +265,17 @@ async function pendingFileThumbnail(source, ffmpeg, signal, cache) {
     if (video && !useHandle) return null;
     let bytes;
     if (video) {
-      bytes = await choosePosterFrame(null, async (seconds, skipBlack) => {
+      bytes = await choosePosterFrame(ffmpeg, null, signal, async read => {
         // FFmpeg advances the inherited handle's offset. Each seek starts with
         // its own fresh, independently validated descriptor.
         const sample = await source.open();
         try {
           if (pendingFileStamp(await sample.stat({ bigint: true })) !== stamp) throw new Error('源文件已变化。');
-          const frame = await sampleVideoFrame(ffmpeg, 'fd:', signal, seconds, skipBlack, sample.fd);
+          const result = await read('fd:', sample.fd);
           if (pendingFileStamp(await sample.stat({ bigint: true })) !== stamp) throw new Error('源文件已变化。');
-          return frame;
+          return result;
         } finally { await sample.close(); }
-      }, signal, true);
+      });
     } else if (useHandle) {
       bytes = await thumbnailFrame(ffmpeg, 'fd:', signal, 640, false, handle.fd);
     } else {
@@ -326,7 +349,7 @@ function mediaHandler(service) {
     const heif = Boolean(still) || heifExtensions.has(asset.extension);
     const waveform = asset.kind === 'audio';
     const rendition = waveform ? 'tauri-audio-waveform-640-v1' : heif ? `tauri-heif-jpeg-${edge}-v1`
-      : asset.kind === 'video' ? 'tauri-video-jpeg-640-v2' : 'tauri-jpeg-640-v1';
+      : asset.kind === 'video' ? 'tauri-video-jpeg-640-v3' : 'tauri-jpeg-640-v1';
     const key = JSON.stringify([rendition, library.registrationId, library.root, library.identity,
       library.publicLibrary.libraryId, asset.id, asset.mediaRevision ?? asset.id, asset.extension, asset.byteCount]);
     if (cache.has(key)) return cache.get(key);

@@ -52,6 +52,20 @@
     catch (error) { throw error instanceof Error ? error : new Error(String(error || '操作未完成。')); }
   }
 
+  async function readSuggestionPages(batch) {
+    if (!batch?.totalTasks || batch.totalTasks <= batch.tasks.length) return batch;
+    const size = batch.tasks.length;
+    const tasks = [...batch.tasks];
+    for (let offset = size; offset < batch.totalTasks; offset += 4 * size) {
+      const pages = [];
+      for (let index = offset; index < Math.min(offset + 4 * size, batch.totalTasks); index += size) {
+        pages.push(call('suggestion:batch', [{ batchId: batch.id, offset: index }]));
+      }
+      for (const page of await Promise.all(pages)) tasks.push(...page);
+    }
+    return { ...batch, tasks };
+  }
+
   function publish(channel, value) {
     for (const listener of listeners.get(channel) ?? []) listener(null, value);
   }
@@ -152,7 +166,7 @@
         if (current.inboxRevision !== previous?.inboxRevision) publish('inbox:changed', true);
         if (JSON.stringify(current.duplicates) !== JSON.stringify(previous?.duplicates)) publish('duplicates:changed', current.duplicates);
         if (current.suggestionsRevision !== previous?.suggestionsRevision) {
-          publish('suggestion:changed', await call('suggestion:batch'));
+          publish('suggestion:changed', await readSuggestionPages(await call('suggestion:batch', ['snapshot'])));
         }
         if (current.searchRevision !== previous?.searchRevision) {
           publish('natural-search:changed', await call('natural-search:status'));
@@ -431,6 +445,8 @@
       const order = ++sequence;
       const result = name === 'local-import:drop-items' ? await submitWebDrop(...args)
         : operationProgress[name] ? await withProgress(name, args, operationProgress[name]) : await call(name, args);
+      if (name === 'suggestion:apply') return { ...result, batch: await readSuggestionPages(result.batch) };
+      if (name.startsWith('suggestion:')) return readSuggestionPages(result);
       if (name === 'visual:start' || name === 'visual:status') watchVisual(result);
       if (libraryChanges.has(name)) remember(result, order);
       else if (result?.state) remember(result.state, order);

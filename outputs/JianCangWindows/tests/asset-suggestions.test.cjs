@@ -59,8 +59,8 @@ async function fixture(t, respond) {
   return { directory, settingsFile, endpoint, requests, snapshots, writes, revisions, writeBlocks, params, service };
 }
 
-async function waitUntil(check) {
-  for (let tries = 0; tries < 150; tries++) {
+async function waitUntil(check, limit = 150) {
+  for (let tries = 0; tries < limit; tries++) {
     const result = check();
     if (result) return result;
     await pause(10);
@@ -463,6 +463,61 @@ test('restores a paused batch and uploads only unfinished assets after explicit 
   const cleared = new AssetSuggestions(options);
   await cleared.initialize();
   assert.equal(cleared.getBatch(), null);
+});
+
+test('processes a 325-image selection across transport chunks and keeps one review and undo group after restart', async t => {
+  const { endpoint, params, requests, writes, directory } = await fixture(t, (response, _request, count) => {
+    if (count === 45) return;
+    response.end(JSON.stringify(count === 65 ? { choices: [] } : visionResponse()));
+  });
+  const options = { ...params, snapshotChanges: false };
+  const first = new AssetSuggestions(options);
+  t.after(() => first.close());
+  await first.initialize();
+  await first.saveSettings({ provider: 'lmstudio', endpoint, model: 'vision-fixture', key: sampleKey });
+  const references = refs(...Array.from({ length: 325 }, (_, index) => index + 1000));
+  const uploadId = 'b7ddbb5a-cc27-4b99-9d78-0cee05cbf5db';
+  assert.deepEqual(await first.start({ uploadId, offset: 0, items: references.slice(0, 300) }), { received: 300 });
+  assert.equal(requests.length, 0);
+  await assert.rejects(() => first.start({ uploadId, offset: 299, items: references.slice(300), final: true }), /列表已变化/);
+  const started = await first.start({ uploadId, offset: 300, items: references.slice(300), final: true });
+  assert.equal(started.tasks.length, references.length);
+  await waitUntil(() => requests.length === 45, 1000);
+  const paused = await first.pause(started.id);
+  assert.equal(paused.tasks.filter(task => task.state === 'ready').length, 44);
+  await first.close();
+
+  const reopened = new AssetSuggestions(options);
+  t.after(() => reopened.close());
+  await reopened.initialize();
+  const restored = await reopened.review();
+  assert.equal(restored.paused, true);
+  assert.deepEqual(restored.tasks.map(task => task.taskId), started.tasks.map(task => task.taskId));
+  assert.deepEqual(restored.tasks.slice(0, 44).map(task => task.suggestion), paused.tasks.slice(0, 44).map(task => task.suggestion));
+  await reopened.resume(started.id);
+  const generated = await waitUntil(() => finished(reopened), 1000);
+  assert.equal(generated.tasks.filter(task => task.state === 'failed').length, 1);
+  await reopened.retryFailed(started.id);
+  const complete = await waitUntil(() => finished(reopened), 1000);
+  assert.equal(complete.tasks.filter(task => task.state === 'ready').length, 325);
+  assert.equal(requests.length, 327);
+
+  const operation = 'fd95fd3f-2074-4ab5-8f1b-775fb6979dc1';
+  const selected = complete.tasks.map(task => ({ taskId: task.taskId, fields: ['title'], operation }));
+  const appliedFirst = await reopened.applySelected(selected.slice(0, 300));
+  assert.equal(appliedFirst.applied, 300);
+  assert.deepEqual(appliedFirst.batch.tasks[300].applied, []);
+  const appliedLast = await reopened.applySelected(selected.slice(300));
+  assert.equal(appliedLast.applied, 25);
+  assert.equal(writes.length, 325);
+  assert.deepEqual([...new Set(writes.map(write => write.reference.undoGroup))], [`suggestions:${operation}`]);
+  await reopened.close();
+  const check = new AssetSuggestions(options);
+  t.after(() => check.close());
+  await check.initialize();
+  assert.equal(check.getBatch().tasks.filter(task => task.applied.includes('title')).length, 325);
+  const initialRows = JSON.parse(await fs.readFile(path.join(directory, 'asset-suggestions-batch-v1.json'), 'utf8')).tasks;
+  assert.ok(initialRows.every(task => task.state === 'waiting'));
 });
 
 test('migrates a compatible profile and keeps LM Studio requests and credentials separate', async t => {

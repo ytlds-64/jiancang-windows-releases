@@ -6,6 +6,12 @@ const { execFile } = require('node:child_process');
 const { AssetSuggestions } = require('../../asset-suggestions.cjs');
 const { NaturalImageSearch, maximumNaturalSearchImages } = require('../../natural-image-search.cjs');
 
+const suggestionPageSize = 256;
+function firstSuggestionPage(batch) {
+  if (!batch?.tasks || batch.tasks.length <= suggestionPageSize) return batch;
+  return { ...batch, totalTasks: batch.tasks.length, tasks: batch.tasks.slice(0, suggestionPageSize) };
+}
+
 function windowsCredentialStorage(signal) {
   const systemRoot = process.env.SystemRoot ?? '';
   const executable = process.platform === 'win32' && path.isAbsolute(systemRoot)
@@ -61,6 +67,8 @@ class AIService {
         return this.getImage({ registrationId: reference.registrationId, assetId: reference.id, revision: asset.revision }, 640, signal);
       },
       apply: (reference, changes) => this.apply(reference, changes),
+      snapshotChanges: false,
+      compactOriginals: true,
       onChange: snapshot => onChange?.('suggestion:changed', snapshot),
     });
     this.search = new NaturalImageSearch({
@@ -146,7 +154,7 @@ class AIService {
         (task.applied.length || eagle.has(task.registrationId))).map(task => task.registrationId));
       for (const id of changed) await this.library.refreshEntry(this.library.entry(id));
       if (changed.size) this.library.notify();
-      return result;
+      return { ...result, batch: firstSuggestionPage(result.batch) };
     });
   }
 
@@ -156,13 +164,25 @@ class AIService {
       case 'suggestion:settings': return this.suggestions.getSettings();
       case 'suggestion:local-models': return this.suggestions.listLocalModels(first);
       case 'suggestion:save-settings': return this.suggestions.saveSettings(first);
-      case 'suggestion:start': return this.suggestions.start(first);
-      case 'suggestion:batch': return this.suggestions.review();
-      case 'suggestion:retry': return this.suggestions.retry(first);
-      case 'suggestion:retry-failed': return this.suggestions.retryFailed(first);
-      case 'suggestion:pause': return this.suggestions.pause(first);
-      case 'suggestion:resume': return this.suggestions.resume(first);
-      case 'suggestion:cancel': return this.suggestions.cancel();
+      case 'suggestion:start': return this.suggestions.start(first).then(firstSuggestionPage);
+      case 'suggestion:batch': {
+        if (first?.originalNote) return this.suggestions.originalNote(first.originalNote);
+        if (first?.batchId) {
+          const offset = first.offset;
+          if (!Number.isSafeInteger(offset) || offset < suggestionPageSize || offset % suggestionPageSize) {
+            throw new Error('AI 整理页码无效。');
+          }
+          const page = this.suggestions.getBatch(offset, suggestionPageSize);
+          if (page?.id !== first.batchId) throw new Error('当前整理任务已变化。');
+          return page.tasks;
+        }
+        return first === 'snapshot' ? this.suggestions.getBatch(0, suggestionPageSize) : this.suggestions.review().then(firstSuggestionPage);
+      }
+      case 'suggestion:retry': return this.suggestions.retry(first).then(firstSuggestionPage);
+      case 'suggestion:retry-failed': return this.suggestions.retryFailed(first).then(firstSuggestionPage);
+      case 'suggestion:pause': return this.suggestions.pause(first).then(firstSuggestionPage);
+      case 'suggestion:resume': return this.suggestions.resume(first).then(firstSuggestionPage);
+      case 'suggestion:cancel': return firstSuggestionPage(this.suggestions.cancel());
       case 'suggestion:discard': return this.suggestions.discard(first);
       case 'suggestion:apply': return this.applySelected(first);
       case 'natural-search:start': {
