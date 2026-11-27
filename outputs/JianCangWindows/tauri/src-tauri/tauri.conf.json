@@ -1,7 +1,7 @@
 {
   "productName": "见藏",
   "mainBinaryName": "jiancang-tauri",
-  "version": "0.36.49",
+  "version": "0.36.50",
   "identifier": "com.jiancang.desktop.tauri",
   "build": {
     "frontendDist": "../generated/frontend"

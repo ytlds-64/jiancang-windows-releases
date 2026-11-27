@@ -556,13 +556,6 @@ function runLocalHistory(action) {
   return false;
 }
 
-function purgeLocalTrash(assets, entry = null) {
-  const id = assets[0]?.sourceLibraryId ?? entry?.libraryId;
-  if (!id || assets.some(asset => asset.sourceKind !== 'local' || asset.sourceLibraryId !== id || !asset.trashed)) return;
-  const catalog = entry ?? catalogEntries().find(item => item.libraryId === id);
-  organizer.purgeTrash(id, assets, catalog, !!entry);
-}
-
 function renderLocalControls() {
   const target = localTarget();
   const loaded = target && catalogEntries().find(entry => entry.libraryId === target.id);
@@ -1794,6 +1787,7 @@ async function showAssetMenu(asset, card, media, event) {
     const live = player?.assetId === asset.id ? player : null;
     const action = await bridge.assetMenu(asset.sourceAssetId, asset.sourceLibraryId, {
       anchor, ...(live && { liveLoop: livePhotoLoops.has(asset.id) }),
+      ...(asset.trashed && { purgeBusy: trashActionBusy() || trashWriteInProgress(asset.sourceLibraryId) }),
       ...(!asset.trashed && { stash: selectionStash.has(asset.id) ? 'remove' : 'add' }),
     });
     const current = assetById.get(asset.id);
@@ -1826,7 +1820,7 @@ async function showAssetMenu(asset, card, media, event) {
     if (canOrganizeFromMenu(current.sourceLibraryId)) {
       if (current.trashed) {
         if (action === 'restore-local') void organizer.restore(current.sourceLibraryId, [current]);
-        if (action === 'purge-local') purgeLocalTrash([current]);
+        if (action === 'purge-trash') purgeSelectedTrash([current]);
       } else {
         if (action === 'favorite-local') toggleFavoriteAsset(current);
         if (action === 'add-collections-local') organizer.addToCollections(current, localCollections(current.sourceLibraryId));
@@ -2021,7 +2015,9 @@ function navigationCount(id) {
   return id === 'stash' ? selectionStash.size : (totals.get(id) || 0);
 }
 
-function trashMenuTargets(scope, confirmed) {
+function trashActionBusy() { return batchWorking || crossLibraryWrite || organizer.immediatePending; }
+
+function trashTargets(scope, confirmed) {
   const groups = [];
   let skipped = 0;
   for (const { libraryId: id, library, revision: catalogRevision } of catalogEntries()) {
@@ -2030,24 +2026,43 @@ function trashMenuTargets(scope, confirmed) {
     const previous = confirmed?.get(id);
     if (confirmed && (!previous || previous.root !== entry?.root || previous.libraryId !== entry?.libraryId)) continue;
     const confirmedIds = previous ? new Set(previous.ids) : null;
-    const ids = library.assets.filter(asset => asset.trashed && (!confirmedIds || confirmedIds.has(asset.id)))
-      .map(asset => asset.id);
-    if (!ids.length) continue;
+    const assets = library.assets.filter(asset => asset.trashed && (!confirmedIds || confirmedIds.has(asset.id)));
+    if (!assets.length) continue;
     if (canOrganizeFromMenu(id) && !trashWriteInProgress(id)) {
-      groups.push({ id, ids, name: library.directoryName, kind: library.kind, catalogRevision,
-        revision: library.revision, trashRevision: library.trashRevision, root: entry.root, libraryId: entry.libraryId });
+      groups.push({ id, ids: assets.map(asset => asset.id), name: library.directoryName, kind: library.kind, catalogRevision,
+        assetName: assets.length === 1 ? assets[0].name : null, revision: library.revision,
+        trashRevision: library.trashRevision, root: entry.root, libraryId: entry.libraryId });
     } else {
-      skipped += ids.length;
+      skipped += assets.length;
     }
   }
   const count = groups.reduce((total, group) => total + group.ids.length, 0);
   return { groups, count, skipped };
 }
 
+function confirmTrashPurge(scope, targets, { all = false } = {}) {
+  if (!targets.count || trashActionBusy()) return false;
+  organizer.purgeTrash(targets.groups, targets.skipped, async previous => {
+    const fresh = previous.length === 1 ? await requestState('refresh', previous[0].id) : await requestState('refreshAll');
+    if (!fresh) throw new Error('暂时无法重新读取回收站，请稍后重试。');
+    return trashTargets(scope, new Map(previous.map(group => [group.id, group]))).groups;
+  }, { all });
+  return true;
+}
+
+function purgeSelectedTrash(assets) {
+  if (trashActionBusy() || !assets.length) return false;
+  const selected = new Map(selectedLibraryGroups(assets.filter(asset => asset.trashed)).map(group => {
+    const entry = state.libraries.find(item => item.id === group.id);
+    return [group.id, { ids: group.ids, root: entry?.root, libraryId: entry?.libraryId }];
+  }));
+  return confirmTrashPurge(scopeId, trashTargets(scopeId, selected));
+}
+
 async function showTrashMenu(event, invoker) {
   const scope = scopeId;
-  const { count, skipped } = trashMenuTargets(scope);
-  const enabled = count > 0 && !batchWorking && !crossLibraryWrite && !organizer.immediatePending;
+  const { count, skipped } = trashTargets(scope);
+  const enabled = count > 0 && !trashActionBusy();
   const heading = count + skipped
     ? `${counts.format(count + skipped)} 项素材${skipped ? ` · ${counts.format(skipped)} 项暂不可操作` : ''}`
     : '回收站为空';
@@ -2057,17 +2072,11 @@ async function showTrashMenu(event, invoker) {
     null,
     { label: '清空回收站…', action: 'purge', enabled, danger: true },
   ], assetMenuAnchor(event, invoker), '回收站操作', { heading, invoker });
-  if (!action || scopeId !== scope || batchWorking || crossLibraryWrite || organizer.immediatePending) return;
-  const targets = trashMenuTargets(scope);
+  if (!action || scopeId !== scope || trashActionBusy()) return;
+  const targets = trashTargets(scope);
   if (!targets.count) { showToast('回收站已更新，没有可操作的素材。'); return; }
   if (action === 'restore') await organizer.restoreAll(targets.groups, targets.skipped);
-  if (action === 'purge') {
-    organizer.emptyTrash(targets.groups, targets.skipped, async previous => {
-      const fresh = previous.length === 1 ? await requestState('refresh', previous[0].id) : await requestState('refreshAll');
-      if (!fresh) throw new Error('暂时无法重新读取回收站，请稍后重试。');
-      return trashMenuTargets(scope, new Map(previous.map(group => [group.id, group]))).groups;
-    });
-  }
+  if (action === 'purge') confirmTrashPurge(scope, targets, { all: true });
 }
 
 function renderNavigation() {
@@ -2665,7 +2674,8 @@ async function showBatchMenu(anchor, position) {
   const canOrganize = !trash && editable.length > 0;
   const canEditMetadata = !trash && metadata.length > 0;
   const canRestore = trash && selectedWritableAssets(selected, true).length > 0;
-  const canPurge = trash && local[0]?.sourceKind === 'local';
+  const canPurge = trash && selected.some(asset => asset.trashed && canOrganizeFromMenu(asset.sourceLibraryId) &&
+    !trashWriteInProgress(asset.sourceLibraryId));
   const images = selected.filter(isProjectImage);
   const alreadyStashed = selected.every(asset => selectionStash.has(asset.id));
   const { showMenu, clipboardItems } = window.jiancangAssetContextMenu;
@@ -2709,7 +2719,7 @@ async function showBatchMenu(anchor, position) {
     [
       canRestore && item('恢复素材', () => batchAssetAction('restore')),
       canOrganize && item('删除…', () => batchAssetAction('trash'), { danger: true }),
-      canPurge && item('永久删除…', assets => purgeLocalTrash(selectedLocalAssets(assets)), { danger: true }),
+      canPurge && item('永久删除…', purgeSelectedTrash, { danger: true, enabled: !trashActionBusy() }),
     ],
   ].map(group => group.filter(Boolean)).filter(group => group.length);
   const items = groups.flatMap((group, index) => index ? [null, ...group] : group);
@@ -5433,13 +5443,20 @@ document.addEventListener('keydown', event => {
     const action = key === 'y' || event.shiftKey ? 'redo' : 'undo';
     if (runLocalHistory(action)) { event.preventDefault(); return; }
   }
-  if (!formFocused && !shortcut && !event.repeat && event.key === 'Delete' && section !== 'trash') {
+  if (!formFocused && !shortcut && !event.repeat && event.key === 'Delete') {
+    const preview = currentViewerAsset();
+    const asset = preview || assetById.get(selectedId);
+    if (section === 'trash' || preview?.trashed) {
+      if (event.altKey || event.shiftKey || document.querySelector('[popover]:popover-open')) return;
+      const selected = !preview && batchMode ? selectedBatchAssets() : asset ? [asset] : [];
+      if (purgeSelectedTrash(selected)) event.preventDefault();
+      return;
+    }
     if (batchMode) {
       event.preventDefault();
       batchAssetAction('trash');
       return;
     }
-    const asset = currentViewerAsset() || assetById.get(selectedId);
     if (writableAsset(asset)) { event.preventDefault(); organizer.trash(asset.sourceLibraryId, [asset]); return; }
   }
   if (viewer && event.code === 'Space' && !event.repeat && !shortcut && !formFocused && !event.target.closest('button')) {
@@ -5765,8 +5782,7 @@ byId('clear-selection-stash').addEventListener('click', () => {
 byId('empty-local-trash').addEventListener('click', () => {
   const catalog = visibleLocalTrash();
   if (!catalog) return;
-  const assets = projectedCatalog(catalog).assets.filter(asset => asset.trashed);
-  purgeLocalTrash(assets, catalog);
+  confirmTrashPurge(catalog.libraryId, trashTargets(catalog.libraryId), { all: true });
 });
 byId('retry-local-trash').addEventListener('click', () => {
   const catalog = visibleLocalTrash();

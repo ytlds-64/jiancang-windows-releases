@@ -1,6 +1,6 @@
 [package]
 name = "jiancang-tauri"
-version = "0.36.49"
+version = "0.36.50"
 edition = "2021"
 description = "见藏 Windows 素材管理工具"
 

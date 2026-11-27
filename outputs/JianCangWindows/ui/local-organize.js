@@ -581,21 +581,33 @@
       catch (error) { notify(error.message); }
     }
 
-    function emptyTrash(groups, skipped, refreshTargets) {
+    function purgeTrash(groups, skipped, refreshTargets, { all = false } = {}) {
       const writer = acrossWriter(skipped);
-      const confirmation = '确认清空回收站';
+      const confirmation = all ? '确认清空回收站' : '确认永久删除';
       const purgeJobs = targets => targets.map(group => ({ group, command: {
         action: 'purgeTrash', ids: group.ids,
         ...(group.kind === 'jiancang' ? { trashRevision: group.trashRevision }
           : { catalogRevision: group.catalogRevision, revision: group.revision }),
       } }));
+      function showPurgeTargets(body, current, unavailable) {
+        const name = !all && current.length === 1 ? current[0].assetName : null;
+        if (name) {
+          const title = element('p', 'organize-summary', name);
+          title.title = name;
+          body.append(title);
+        }
+        showAcrossTargets(body, current, unavailable);
+      }
       let jobs = purgeJobs(groups);
       let needsReconfirm = false;
       open({
-        title: '清空回收站？', subtitle: acrossSummary(groups),
+        title: all ? '清空回收站？' : '永久删除所选素材？', subtitle: acrossSummary(groups),
         submitText: confirmation, mode: 'across', danger: true,
         build(body) {
-          body.append(element('p', 'organize-confirm-description', '所列素材将永久删除，包括被搜索或筛选隐藏的素材。此操作无法撤销。'));
+          const description = all
+            ? '所列素材将永久删除，包括被搜索或筛选隐藏的素材。此操作无法撤销。'
+            : '所选素材将永久删除。此操作无法撤销。';
+          body.append(element('p', 'organize-confirm-description', description));
           if (groups.some(group => group.kind === 'local')) {
             body.append(element('p', 'organize-hint', '本地库中的原件和历史版本也会删除。'));
           }
@@ -603,7 +615,7 @@
             body.append(element('p', 'organize-hint', '同步库会将删除同步到其他设备，云端文件由同步服务管理。'));
           }
           const targets = element('div');
-          showAcrossTargets(targets, groups, skipped);
+          showPurgeTargets(targets, groups, skipped);
           body.append(targets);
           return targets;
         },
@@ -618,7 +630,7 @@
             }
             jobs = purgeJobs(refreshed);
             targets.replaceChildren(element('p', 'organize-hint', '已重新核对先前确认的素材。请再次确认下列项目。'));
-            showAcrossTargets(targets, refreshed, 0);
+            showPurgeTargets(targets, refreshed, 0);
             const remainingCount = jobs.reduce((total, job) => total + job.command.ids.length, 0);
             if (remainingCount < confirmedCount) {
               targets.append(element('p', 'organize-hint', `${confirmedCount - remainingCount} 项已离开回收站或暂不可操作。`));
@@ -730,21 +742,6 @@
       });
     }
 
-    function purgeTrash(registrationId, assets, catalog, all = false) {
-      if (!assets.length || catalog?.library.kind !== 'local' || assets.some(asset => !asset.trashed)) return;
-      confirm(registrationId, {
-        title: all ? '清空这个本地库的回收站？' : '永久删除素材？',
-        subtitle: all ? `${catalog.library.directoryName} · ${assets.length} 项素材` : assetSummary(assets),
-        description: all
-          ? '此库回收站中的全部素材及其原件和历史版本都会删除，包括当前筛选隐藏的项目。此操作无法撤销。'
-          : '所选素材的原件和历史版本会一起删除。此操作无法撤销。',
-        label: all ? '确认清空回收站' : '确认永久删除',
-        command: { action: 'purgeTrash', revision: catalog.library.revision, catalogRevision: catalog.revision,
-          ...(all ? { all: true } : { ids: assetIds(assets) }) },
-        message: `已永久删除 ${assets.length} 项素材。`,
-      });
-    }
-
     async function retryPurge(registrationId, catalogRevision) {
       if (immediatePending) return;
       await immediate(registrationId, { action: 'retryPurge', catalogRevision }, '回收站原件已清理。');
@@ -818,7 +815,7 @@
       }
     }
 
-    return { editAssets, renameAssets, collection, collectionChoices, deleteCollection, trash, purgeTrash, retryPurge, restore, restoreAll, emptyTrash, undo, redo,
+    return { editAssets, renameAssets, collection, collectionChoices, deleteCollection, trash, purgeTrash, retryPurge, restore, restoreAll, undo, redo,
       editAcrossLibraries, renameAcrossLibraries, changeTrashAcrossLibraries, addToCollections, removeFromCollection,
       setRating, setRatings, toggleFavorite, setCollectionColor,
       get immediatePending() { return immediatePending; } };

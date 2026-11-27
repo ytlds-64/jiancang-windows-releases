@@ -403,8 +403,8 @@
         : menuItem('移出暂存选片', 'stash-remove'));
     }
     if (canWrite && trashed) {
-      actions.push(null, menuItem('恢复素材', 'restore-local'));
-      if (entry.kind === 'local') actions.push({ ...menuItem('永久删除…', 'purge-local'), danger: true });
+      actions.push(null, menuItem('恢复素材', 'restore-local'),
+        { ...menuItem('永久删除…', 'purge-trash', !options?.purgeBusy), danger: true });
     }
     if (canWrite && !trashed) {
       const rating = [1, 2, 3, 4, 5, 0].map(value => ({

@@ -1068,7 +1068,7 @@ function openAssetMenu(id, registrationId, options) {
         options.stash === 'add' ? option('加入暂存选片', 'stash-add') : option('移出暂存选片', 'stash-remove')] : []),
       ...(!canOrganize ? [] : asset.trashed
         ? [{ type: 'separator' }, option('恢复素材', 'restore-local'),
-          ...(library.publicLibrary.kind === 'local' ? [option('永久删除…', 'purge-local')] : [])]
+          option('永久删除…', 'purge-trash', !options?.purgeBusy)]
         : [
           { type: 'separator' }, option(asset.favorite ? '取消收藏' : '加入收藏', 'favorite-local'),
           { label: '评分', submenu: [1, 2, 3, 4, 5, 0].map(value => ({
