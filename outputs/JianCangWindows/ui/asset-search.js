@@ -75,6 +75,7 @@
     let field = 'all';
     let composing = false;
     let timer;
+    const normalizedAssets = new WeakMap();
 
     function close() { if (panel.matches(':popover-open')) panel.hidePopover(); }
     function position() {
@@ -218,8 +219,13 @@
         if (!terms.length) return null;
         const scope = field;
         return asset => {
-          const haystack = canonicalQuery(searchableText(asset, scope, recognizedText));
-          return terms.every(term => haystack.includes(term.text) !== term.excluded);
+          const source = searchableText(asset, scope, recognizedText);
+          let cached = normalizedAssets.get(asset);
+          if (cached?.scope !== scope || cached.source !== source) {
+            cached = { scope, source, text: canonicalQuery(source) };
+            normalizedAssets.set(asset, cached);
+          }
+          return terms.every(term => cached.text.includes(term.text) !== term.excluded);
         };
       },
     };

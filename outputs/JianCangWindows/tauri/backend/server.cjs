@@ -3,7 +3,7 @@
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { randomBytes, timingSafeEqual } = require('node:crypto');
+const { createHash, randomBytes, timingSafeEqual } = require('node:crypto');
 const { LibraryService } = require('./library-service.cjs');
 const { mediaHandler } = require('./media.cjs');
 const { CaptureService } = require('./capture-service.cjs');
@@ -31,6 +31,32 @@ function respond(response, status, result) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': bytes.length,
     'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   response.end(bytes);
+}
+
+function libraryStateRevision(state) {
+  // Catalog revisions represent the asset data. Track status and acknowledged
+  // conflicts separately because they can change without replacing a catalog.
+  const parts = [state.activeLibraryId, state.message, state.libraryOpening, state.libraries,
+    state.catalogs.map(({ libraryId, revision, library }) => [libraryId, revision, library.syncConflicts])];
+  return createHash('sha256').update(JSON.stringify(parts)).digest('base64url');
+}
+
+function libraryResponse(value, name, args) {
+  if (Array.isArray(value?.catalogs) && 'library' in value) {
+    const libraryRevision = libraryStateRevision(value);
+    if (name === 'library:state' && args[0]?.compact === true) {
+      if (args[0].knownRevision === libraryRevision) return { notModified: true };
+      // The current catalog is already in catalogs. Restore the legacy
+      // renderer shape in the Tauri bridge without serializing it a second time.
+      const { library, ...compact } = value;
+      return { ...compact, libraryRevision };
+    }
+    return { ...value, libraryRevision };
+  }
+  if (Array.isArray(value?.state?.catalogs) && 'library' in value.state) {
+    return { ...value, state: { ...value.state, libraryRevision: libraryStateRevision(value.state) } };
+  }
+  return value;
 }
 
 async function commandBody(request) {
@@ -66,10 +92,8 @@ async function start(profile, version, installed, downloads) {
       process.stderr.write('暂时无法接续旧版设置，将在下次启动时重试。\n');
     }
   }
-  let libraryRevision = 0;
   let capture;
   const service = new LibraryService(profile, { onStateChange: () => {
-    libraryRevision++;
     void capture?.enableDefault().catch(() => {});
   } });
   await service.initialize();
@@ -112,7 +136,7 @@ async function start(profile, version, installed, downloads) {
     }
     if (name === 'desktop:status') {
       const { historyRevision } = await capture.command('browser-capture:worker-state');
-      return { libraryRevision, historyRevision, suggestionsRevision, searchRevision,
+      return { libraryRevision: libraryStateRevision(service.state()), historyRevision, suggestionsRevision, searchRevision,
         inboxRevision: organizer.inboxRevision, duplicates: organizer.duplicateProgress(),
         cloudRevisions: Object.fromEntries(cloudRevisions), update: updates.status() };
     }
@@ -195,7 +219,7 @@ async function start(profile, version, installed, downloads) {
       if (command) {
         const { name, args } = await commandBody(request);
         const value = await dispatch(name, args);
-        respond(response, 200, { ok: true, value: value ?? null });
+        respond(response, 200, { ok: true, value: libraryResponse(value, name, args) ?? null });
       } else {
         const media = ['GET', 'HEAD'].includes(request.method) && matchesMedia.exec(pathname);
         if (!media) { respond(response, 404, { ok: false, error: '此资源不存在。' }); return; }

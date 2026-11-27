@@ -23,7 +23,7 @@ const { findFfmpeg, openAsset, exportAsset, canGenerateThumbnail } = require('./
 
 const kinds = new Set(['local', 'eagle', 'jiancang']);
 const trashCheckInterval = 60 * 60 * 1000;
-const importRefreshInterval = 350;
+const localImportRefreshInterval = 1500;
 const syncImportRefreshInterval = 10_000;
 const localActions = new Set(['edit', 'trash', 'restore', 'rename', 'planRename', 'planTagChange', 'changeTag',
   'createCollection', 'editCollection', 'deleteCollection', 'undo', 'redo', 'applySuggestion']);
@@ -104,7 +104,7 @@ class LibraryService {
     catch { await writer.close().catch(() => {}); }
     this.queue = new LocalImportQueue({ directory: path.join(this.profile, 'local-imports-v1'),
       perform: (task, progress) => this.importTask(task, progress),
-      onChange: id => this.scheduleSyncImportRefresh(id) });
+      onChange: id => this.scheduleImportRefresh(id) });
     await this.queue.initialize();
     this.watcher = createLibraryWatcher({
       needsRetry: id => {
@@ -115,8 +115,8 @@ class LibraryService {
       onChange: (id, needsRefresh) => this.serial(async () => {
         const entry = this.registry.entries.find(item => item.id === id);
         if (!entry || !needsRefresh()) return;
-        if (entry.kind === 'jiancang' && this.importQueueBusy(id)) {
-          this.deferSyncImportRefresh(entry);
+        if (entry.kind !== 'eagle' && this.importQueueBusy(id)) {
+          this.deferImportRefresh(entry);
           return;
         }
         await this.refreshEntry(entry);
@@ -272,7 +272,7 @@ class LibraryService {
     // Writes run in the serial queue and see the refreshed status.
     if (!this.catalogs.has(entry.id)) this.statuses.set(entry.id, { status: 'loading' });
     try {
-      const trackChanges = coverWatchChanges || this.importRefreshes.get(entry.id)?.syncDirty;
+      const trackChanges = coverWatchChanges || this.importRefreshes.get(entry.id)?.dirty;
       const read = trackChanges ? await this.watcher.beginRefresh(entry.id) : null;
       const loaded = await readCatalog(entry.root, entry.kind, signal);
       if (!locationMatches(entry, loaded.library, false)) throw new Error('这个文件夹包含另一份素材库，请重新定位。');
@@ -291,7 +291,7 @@ class LibraryService {
         clearTimeout(refresh.timer);
         refresh.timer = null;
         refresh.lastScan = performance.now();
-        refresh.syncDirty = false;
+        refresh.dirty = false;
       }
       this.notify();
     }
@@ -300,7 +300,7 @@ class LibraryService {
   importRefreshFor(entry) {
     let refresh = this.importRefreshes.get(entry.id);
     if (!refresh) {
-      refresh = { root: entry.root, lastScan: -Infinity, timer: null, syncDirty: false };
+      refresh = { root: entry.root, lastScan: -Infinity, timer: null, dirty: false, batchId: null };
       this.importRefreshes.set(entry.id, refresh);
     }
     return refresh;
@@ -311,19 +311,21 @@ class LibraryService {
     return running > 0 || (pending > 0 && !this.queue.isPaused(id));
   }
 
-  deferSyncImportRefresh(entry) {
+  deferImportRefresh(entry) {
     const refresh = this.importRefreshFor(entry);
-    refresh.syncDirty = true;
-    if (!refresh.timer) {
-      // A continuous stream of queued work still gets periodic catalog updates.
-      const timer = setTimeout(() => this.scheduleSyncImportRefresh(entry.id, timer), syncImportRefreshInterval).unref();
-      refresh.timer = timer;
-    }
+    refresh.dirty = true;
+    if (refresh.timer) return;
+    // Long-running imports get periodic updates. Local imports share this timer with folder notifications.
+    const interval = entry.kind === 'local'
+      ? Math.min(localImportRefreshInterval, Math.max(0, localImportRefreshInterval - (performance.now() - refresh.lastScan)))
+      : syncImportRefreshInterval;
+    const timer = setTimeout(() => this.scheduleImportRefresh(entry.id, timer), interval).unref();
+    refresh.timer = timer;
   }
 
-  scheduleSyncImportRefresh(id, dueTimer) {
+  scheduleImportRefresh(id, dueTimer) {
     const refresh = this.importRefreshes.get(id);
-    const ready = () => refresh?.syncDirty && (dueTimer ? refresh.timer === dueTimer : !this.importQueueBusy(id));
+    const ready = () => refresh?.dirty && (dueTimer ? refresh.timer === dueTimer : !this.importQueueBusy(id));
     if (!ready()) return;
     void this.serial(async () => {
       const entry = this.registry.entries.find(item => item.id === id && item.root === refresh.root);
@@ -333,27 +335,22 @@ class LibraryService {
     }).catch(() => {});
   }
 
-  async refreshImportedEntry(entry) {
+  async refreshImportedEntry(entry, batchId) {
     if (this.shutdown.signal.aborted) return;
     if (entry.kind === 'jiancang') {
-      this.deferSyncImportRefresh(entry);
+      this.deferImportRefresh(entry);
       return;
     }
     const refresh = this.importRefreshFor(entry);
-    const remaining = importRefreshInterval - (performance.now() - refresh.lastScan);
-    if (remaining <= 0 || !this.queue.hasPending(entry.id)) {
+    const firstInBatch = refresh.batchId !== batchId;
+    refresh.batchId = batchId;
+    refresh.dirty = true;
+    if (firstInBatch || !this.queue.hasPending(entry.id)) {
       await this.refreshEntry(entry);
       return;
     }
-    // Flush the intermediate writes even if the rest of the batch fails, is paused or is cancelled.
-    if (refresh.timer) return;
-    const timer = setTimeout(() => {
-      void this.serial(async () => {
-        if (this.importRefreshes.get(entry.id) !== refresh || refresh.timer !== timer) return;
-        await this.refreshEntry(this.entry(entry.id));
-      }).catch(() => {});
-    }, remaining).unref();
-    refresh.timer = timer;
+    // Queue state changes can flush pending writes before the periodic scan when work settles.
+    this.deferImportRefresh(entry);
   }
 
   async open(directory, kind, previous) {
@@ -792,7 +789,7 @@ class LibraryService {
       expectedLibraryId: entry.libraryId, undoGroup: task.batchId,
       collectionIds: task.collectionId ? [task.collectionId] : [], collectionParentId: task.collectionId };
     const result = await (entry.kind === 'local' ? importLocalAsset(entry.root, input) : this.syncWriter.upload(entry, input));
-    if (queued) await this.refreshImportedEntry(entry);
+    if (queued) await this.refreshImportedEntry(entry, task.batchId);
     else await this.refreshEntry(entry);
     return result;
   }
@@ -960,7 +957,7 @@ class LibraryService {
         const refresh = this.importRefreshes.get(id);
         return { ok: true, ...details,
           summary: this.queue.summary(id), paused: this.queue.isPaused(id), catalogRevision: this.catalogs.get(id)?.cacheKey ?? null,
-          refreshPending: Boolean(refresh?.timer || refresh?.syncDirty) };
+          refreshPending: Boolean(refresh?.dirty) };
       }
       case 'local-import:retry': return this.serial(async () => ({ ok: true, ...(await this.queue.retry(this.writable(args[0]).id, args[1])) }));
       case 'local-import:retry-failed': return this.serial(async () => ({ ok: true, ...(await this.queue.retryFailed(this.writable(args[0]).id)) }));

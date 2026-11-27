@@ -33,6 +33,7 @@
   const editorImageTypes = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'avif']);
   const uploadChunkBytes = 768 * 1024;
   let snapshot;
+  let readingSnapshot;
   let sequence = 0;
   let lastState = 0;
   let desktopStatus;
@@ -70,6 +71,21 @@
     publish('library:state-changed', next);
   }
 
+  function readSnapshot() {
+    if (readingSnapshot) return readingSnapshot;
+    const order = ++sequence;
+    const knownRevision = snapshot?.libraryRevision;
+    readingSnapshot = call('library:state', [{ compact: true, knownRevision }]).then(next => {
+      if (next?.notModified || order < lastState) return snapshot;
+      if (Array.isArray(next?.catalogs) && !('library' in next)) {
+        next.library = next.catalogs.find(catalog => catalog.libraryId === next.activeLibraryId)?.library ?? null;
+      }
+      remember(next, order);
+      return next;
+    }).finally(() => { readingSnapshot = undefined; });
+    return readingSnapshot;
+  }
+
   function monitorImport(id) {
     if (!id) return;
     const current = monitoredImports.get(id);
@@ -90,8 +106,7 @@
         pending = queue.refreshPending || queue.summary?.running > 0 || (!queue.paused && queue.summary?.pending > 0);
         const displayedRevision = snapshot?.catalogs.find(item => item.libraryId === id)?.revision;
         if (queue.catalogRevision != null && queue.catalogRevision !== displayedRevision) {
-          const order = ++sequence;
-          remember(await call('library:state'), order);
+          await readSnapshot();
         }
       } catch { /* A disconnected library is reported by the regular refresh. */ }
       finally {
@@ -131,10 +146,8 @@
       if (snapshot) {
         const current = await call('desktop:status');
         const previous = desktopStatus;
-        if (current.libraryRevision !== previous?.libraryRevision) {
-          const order = ++sequence;
-          remember(await call('library:state'), order);
-        }
+        const displayedRevision = snapshot.libraryRevision ?? previous?.libraryRevision;
+        if (current.libraryRevision !== displayedRevision) await readSnapshot();
         if (current.historyRevision !== previous?.historyRevision) publish('browser-capture:history-changed');
         if (current.inboxRevision !== previous?.inboxRevision) publish('inbox:changed', true);
         if (JSON.stringify(current.duplicates) !== JSON.stringify(previous?.duplicates)) publish('duplicates:changed', current.duplicates);
@@ -395,6 +408,7 @@
 
   const renderer = {
     async invoke(name, ...args) {
+      if (name === 'library:state') return readSnapshot();
       if (name === 'asset:context-menu') return assetMenu(...args);
       if (name === 'assets:clipboard-menu') {
         const assets = args[0].map(({ id, registrationId }) => assetAt(registrationId, id)).filter(Boolean);
@@ -418,7 +432,7 @@
       const result = name === 'local-import:drop-items' ? await submitWebDrop(...args)
         : operationProgress[name] ? await withProgress(name, args, operationProgress[name]) : await call(name, args);
       if (name === 'visual:start' || name === 'visual:status') watchVisual(result);
-      if (name === 'library:state' || libraryChanges.has(name)) remember(result, order);
+      if (libraryChanges.has(name)) remember(result, order);
       else if (result?.state) remember(result.state, order);
       if (importChanges.has(name) && result?.ok) {
         publish('local-import:changed', [args[0]]);

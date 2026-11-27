@@ -67,6 +67,59 @@ function assetIn(state, id) {
   return state.library.assets.find(asset => asset.id === id);
 }
 
+test('Tauri reads one catalog at startup and polls only for a different state', { timeout: 15_000 }, async () => {
+  const temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'jiancang-tauri-state-')));
+  let backend;
+  try {
+    backend = await start(path.join(temp, 'profile'));
+    const { command } = backend;
+    const { activeLibraryId } = await command('local:create', '状态测试', temp);
+    let stateReads = 0;
+    const polls = [];
+    const window = { __TAURI__: { core: { invoke(operation, { name, args }) {
+      assert.equal(operation, 'library_command');
+      if (name === 'library:state') stateReads++;
+      return command(name, ...args);
+    } } } };
+    const bridge = await fs.readFile(path.join(__dirname, '../frontend/tauri-platform.js'), 'utf8');
+    runInNewContext(bridge, { window, location: { hostname: 'tauri.localhost' }, document: { addEventListener() {} },
+      setTimeout(callback, delay) { if (delay === 1200) polls.push(callback); } });
+    const ipc = window.jiancangTauriPlatform.ipcRenderer;
+    const states = [];
+    ipc.on('library:state-changed', (_, state) => states.push(state));
+    async function poll() {
+      polls.shift()();
+      await waitFor(() => polls.length);
+    }
+
+    const [initial, concurrent] = await Promise.all([ipc.invoke('library:state'), ipc.invoke('library:state')]);
+    assert.equal(stateReads, 1);
+    assert.equal(initial, concurrent);
+    assert.equal(initial.library, initial.catalogs[0].library);
+    assert.equal(initial.activeLibraryId, activeLibraryId);
+    const compact = await command('library:state', { compact: true });
+    assert.equal('library' in compact, false);
+    assert.equal(compact.libraryRevision, initial.libraryRevision);
+    assert.deepEqual(await command('library:state', { compact: true, knownRevision: compact.libraryRevision }),
+      { notModified: true });
+    await poll();
+    assert.equal(stateReads, 1);
+    assert.equal(states.length, 1);
+
+    await command('local:mutate', activeLibraryId, { action: 'createCollection', name: '新集合' });
+    await poll();
+    assert.equal(stateReads, 2);
+    assert.equal(states.length, 2);
+    assert.notEqual(states[1].libraryRevision, initial.libraryRevision);
+    assert.equal(states[1].library.collections[0].name, '新集合');
+    await poll();
+    assert.equal(stateReads, 2);
+  } finally {
+    await backend?.close();
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
+
 async function waitFor(work) {
   const deadline = Date.now() + 7000;
   while (Date.now() < deadline) {

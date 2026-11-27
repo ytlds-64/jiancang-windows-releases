@@ -49,7 +49,7 @@ async function waitFor(predicate) {
   assert.fail('后台修改超过测试时限。');
 }
 
-test('publishes a partial import catalog and consolidates scans when the last source fails', async t => {
+test('publishes a partial local import catalog, covers watcher notifications and survives a final source failure', async t => {
   const directory = await temporary(t);
   const service = new LibraryService(path.join(directory, 'profile'));
   const firstVisible = Promise.withResolvers();
@@ -57,12 +57,22 @@ test('publishes a partial import catalog and consolidates scans when the last so
   const files = ['first.txt', 'second.txt', 'third.txt', 'fourth.txt', 'fifth.txt', 'missing.txt'];
   const paths = files.map(file => path.join(directory, file));
   await Promise.all(paths.map((file, index) => fs.writeFile(file, files[index])));
+  let fileChanged;
+  t.mock.method(require('node:fs'), 'watch', (_root, _options, listener) => {
+    fileChanged = listener;
+    return { on() {}, close() {} };
+  });
   await service.initialize();
   try {
     const call = (name, ...args) => service.command(name, args);
     const { activeLibraryId: id, catalogs } = await call('local:create', '分批入库', directory);
-    service.watcher.close();
+    await waitFor(() => fileChanged);
     const initialRevision = catalogs.find(catalog => catalog.libraryId === id).revision;
+    const refreshImported = service.refreshImportedEntry.bind(service);
+    service.refreshImportedEntry = (...args) => {
+      fileChanged('rename', LOCAL_MANIFEST);
+      return refreshImported(...args);
+    };
     const originalImport = service.importTask.bind(service);
     service.importTask = async (task, progress) => {
       if (task.name === 'second.txt') await firstVisible.promise;
@@ -111,6 +121,51 @@ test('publishes a partial import catalog and consolidates scans when the last so
   } finally {
     firstVisible.resolve();
     lastSource.resolve();
+    await service.close();
+  }
+});
+
+test('publishes committed local originals when paused and shows the first item of a following batch immediately', async t => {
+  const directory = await temporary(t);
+  const service = new LibraryService(path.join(directory, 'profile'));
+  const files = ['first.txt', 'second.txt', 'cancelled.txt', 'next.txt', 'last.txt'];
+  const paths = files.map(file => path.join(directory, file));
+  await Promise.all(paths.map(file => fs.writeFile(file, path.basename(file))));
+  await service.initialize();
+  const finish = Promise.withResolvers();
+  try {
+    const call = (name, ...args) => service.command(name, args);
+    const { activeLibraryId: id } = await call('local:create', '暂停入库', directory);
+    service.watcher.close();
+    const importTask = service.importTask.bind(service);
+    const assetNames = () => service.state().library.assets.map(asset => asset.name).sort();
+    let namesAfterNext;
+    service.importTask = async (task, progress) => {
+      if (task.name === 'last.txt') await finish.promise;
+      const result = await importTask(task, progress);
+      if (task.name === 'second.txt') await call('local-import:set-paused', id, true);
+      if (task.name === 'next.txt') namesAfterNext = assetNames();
+      return result;
+    };
+    await call('local-import:choose', id, null, paths.slice(0, 3));
+    await waitFor(async () => {
+      const queue = await call('local-import:list', id, false);
+      return queue.paused && queue.summary.done === 2 && !queue.refreshPending;
+    });
+    assert.deepEqual(assetNames(), ['first', 'second']);
+    assert.deepEqual(await call('local-import:cancel-pending', id), { ok: true, cancelled: 1 });
+    await call('local-import:choose', id, null, paths.slice(3));
+    await call('local-import:set-paused', id, false);
+    await waitFor(() => namesAfterNext);
+    assert.deepEqual(namesAfterNext, ['first', 'next', 'second']);
+    finish.resolve();
+    await waitFor(async () => {
+      const queue = await call('local-import:list', id, false);
+      return queue.summary.done === 4 && !queue.refreshPending;
+    });
+    assert.deepEqual(assetNames(), ['first', 'last', 'next', 'second']);
+  } finally {
+    finish.resolve();
     await service.close();
   }
 });
@@ -305,6 +360,11 @@ test('coalesces sync imports and watcher updates before verifying the final cata
   const secondStarted = Promise.withResolvers();
   const resume = Promise.withResolvers();
   await Promise.all(paths.map(file => fs.writeFile(file, path.basename(file))));
+  let fileChanged;
+  t.mock.method(require('node:fs'), 'watch', (_root, _options, listener) => {
+    fileChanged = listener;
+    return { on() {}, close() {} };
+  });
   await service.initialize();
   try {
     const call = (name, ...args) => service.command(name, args);
@@ -312,6 +372,7 @@ test('coalesces sync imports and watcher updates before verifying the final cata
     const initialRevision = catalogs.find(catalog => catalog.libraryId === id).revision;
     await call('sync:configure-write', id, true);
     await service.operations;
+    await waitFor(() => fileChanged);
     const importTask = service.importTask.bind(service);
     service.importTask = async (task, progress) => {
       if (task.name === 'sync-second.txt') {
@@ -329,7 +390,8 @@ test('coalesces sync imports and watcher updates before verifying the final cata
     await call('local-import:choose', id, null, paths);
     await secondStarted.promise;
     const first = JSON.parse(await fs.readFile(await call('sync:latest-record-path', id), 'utf8'));
-    await publishMobileEdit(root, first, { name: string('导入中的外部更新') });
+    const firstEdit = await publishMobileEdit(root, first, { name: string('导入中的外部更新') });
+    fileChanged('rename', `changes/${iosDevice}/1-${firstEdit}.json`);
     await delay(800);
     assert.equal(scans, 0);
     const running = await call('local-import:list', id, false);
@@ -350,7 +412,8 @@ test('coalesces sync imports and watcher updates before verifying the final cata
     for (const [assetId, bytes] of expected) assert.deepEqual(await fs.readFile(service.original(assetId, id).file), bytes);
 
     const last = JSON.parse(await fs.readFile(await call('sync:latest-record-path', id), 'utf8'));
-    await publishMobileEdit(root, last, { name: string('外部更新') }, { ordinal: 2 });
+    const lastEdit = await publishMobileEdit(root, last, { name: string('外部更新') }, { ordinal: 2 });
+    fileChanged('rename', `changes/${iosDevice}/2-${lastEdit}.json`);
     await waitFor(() => service.state().library.assets.some(asset => asset.id === last.entityID && asset.name === '外部更新'));
   } finally {
     resume.resolve();
