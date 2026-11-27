@@ -1,0 +1,85 @@
+:root {
+  color-scheme: dark;
+  font: 13px "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --reference-ink: #eeeae3;
+  --reference-muted: #c1bdb5;
+  --reference-canvas: #131414;
+  --reference-accent: #edc78e;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body { background: transparent; }
+
+body {
+  height: 100dvh;
+  margin: 0;
+  color: var(--reference-ink);
+}
+
+.reference-canvas {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 100%;
+  opacity: var(--reference-opacity, 1);
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.reference-canvas:has(#reference-image:not([hidden])) { cursor: grab; }
+.reference-canvas.is-moving:has(#reference-image:not([hidden])) { cursor: grabbing; }
+.reference-canvas:has(#reference-image[hidden]) { background: var(--reference-canvas); }
+.reference-canvas:focus { outline: none; }
+
+#reference-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+.reference-feedback {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 12px);
+  padding: 5px;
+  color: var(--reference-muted);
+}
+
+.reference-feedback p { margin: 0; text-align: center; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+button:hover { background: #30312f; }
+button:focus-visible { outline: 2px solid var(--reference-accent); outline-offset: -2px; }
+#reference-retry { color: var(--reference-accent); }

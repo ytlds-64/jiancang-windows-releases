@@ -1,0 +1,21 @@
+.reading-dialog { width: min(740px, calc(100vw - 36px)); max-height: min(78vh, 740px); }
+.reading-summary { margin: 12px 17px 8px; color: var(--muted); }
+.reading-groups { padding: 0 17px 17px; }
+.reading-group { padding: 9px 0; }
+.reading-group + .reading-group { border-top: 1px solid var(--line); }
+.reading-group-head, .reading-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; }
+.reading-group-head h3 { font-size: 14px; margin: 0; }
+.reading-count { color: var(--muted); }
+.reading-actions { margin-left: auto; }
+.reading-rows { list-style: none; padding: 0; margin: 10px 0 0; }
+.reading-issue { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.reading-issue button { flex: none; }
+.reading-content { min-width: 0; overflow-wrap: anywhere; }
+.reading-content h4 { margin: 0 0 4px; font-size: 13px; }
+.reading-path { color: var(--muted); font-size: 11px; font-family: Consolas, ui-monospace, monospace; }
+.reading-reason, .reading-guidance { margin: 4px 0 0; line-height: 1.45; }
+.reading-guidance { color: var(--muted); }
+@media (max-width: 640px) {
+  .reading-actions { margin-left: 0; }
+  .reading-issue { flex-direction: column; }
+}

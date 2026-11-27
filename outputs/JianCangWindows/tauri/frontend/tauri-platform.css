@@ -1,0 +1,74 @@
+[data-windows-caption][data-tauri-window-chrome] { --caption-width: 140px; }
+[data-tauri-window-chrome][data-windows-caption] > :is(.app-bar, .viewer-toolbar) { app-region: no-drag; }
+.tauri-window-controls {
+  position: fixed;
+  z-index: 20;
+  inset: 2px 0 auto auto;
+  height: 48px;
+  display: flex;
+  color: var(--ink);
+  -webkit-app-region: no-drag;
+}
+.tauri-window-control {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+}
+.tauri-window-control:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
+.tauri-window-close:hover { background: #c42b1c; color: #fff; }
+.tauri-window-control:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.tauri-window-control span { position: relative; display: block; width: 11px; height: 11px; }
+.tauri-window-minimize span::before {
+  content: '';
+  position: absolute;
+  inset: 5px 0 auto;
+  border-top: 1px solid currentColor;
+}
+.tauri-window-maximize span { border: 1px solid currentColor; border-radius: 1px; }
+.tauri-window-maximize[data-restorable] span {
+  width: 9px;
+  height: 9px;
+  transform: translate(-1px, 1px);
+}
+.tauri-window-maximize[data-restorable] span::before {
+  content: '';
+  position: absolute;
+  inset: -3px -3px 1px 1px;
+  border-top: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  border-radius: 1px;
+}
+.tauri-window-close span::before, .tauri-window-close span::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: 5px;
+  border-top: 1px solid currentColor;
+  transform: rotate(45deg);
+}
+.tauri-window-close span::after { transform: rotate(-45deg); }
+body:has(:fullscreen) > .tauri-window-controls { display: none; }
+.tauri-close-dialog, .tauri-window-settings { width: min(430px, calc(100vw - 36px)); }
+.tauri-close-dialog > .library-dialog-actions { border-top: 0; }
+.tauri-window-check { display: flex; align-items: center; gap: 8px; width: fit-content; }
+.tauri-window-check input { margin: 0; }
+.tauri-close-dialog > .tauri-window-check { margin: 16px 16px 0; }
+.tauri-window-settings-body { display: grid; gap: 15px; padding: 16px; }
+.tauri-window-setting { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tauri-window-setting select {
+  min-height: 33px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--canvas);
+}
+.tauri-window-settings-status { margin: 0; font-size: 12px; color: var(--muted); }
+.tauri-window-settings-status:empty { display: none; }
+.tauri-close-dialog > .tauri-window-settings-status { margin: 10px 16px 0; }

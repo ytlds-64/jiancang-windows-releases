@@ -1,0 +1,46 @@
+.structured-export-dialog { width: min(625px, calc(100vw - 26px)); max-height: min(780px, 92dvh); }
+.structured-export-dialog[open] { display: flex; flex-direction: column; }
+.structured-export-body { padding: 14px 16px 12px; min-width: 0; min-height: 0; overflow: auto; }
+.structured-export-setup { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.export-presets { min-width: 0; margin: 0; padding: 8px 10px 10px; border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 7px; }
+.export-presets legend { padding: 0 4px; font-size: 13px; font-weight: 650; }
+.export-presets-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
+.export-presets-row select, .export-presets-row input { flex: 1 1 9rem; min-width: 0; max-width: 100%; color: var(--ink); }
+.export-presets-row input { min-height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); font: inherit; }
+.export-presets-row button { flex: none; }
+.export-presets .structured-export-secondary { margin: 0; }
+.structured-export-layout { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 5px; }
+.structured-export-layout legend, .structured-export-output h3 { padding: 0; margin: 0 0 8px; font-size: 13px; font-weight: 650; }
+.structured-export-choice { min-width: 0; display: flex; align-items: start; gap: 9px; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+.structured-export-choice:has(input:checked) { border-color: var(--line); background: var(--rail); }
+.structured-export-choice input { margin: 3px 0 0; accent-color: var(--accent); }
+.structured-export-choice div { display: grid; gap: 4px; min-width: 0; }
+.structured-export-choice strong { font-size: 13px; font-weight: 620; }
+.structured-export-choice span, .structured-export-secondary { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.structured-export-extras { padding: 10px; border: 1px solid var(--line); }
+.structured-export-path-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.structured-export-path { flex: 1; min-width: 0; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; padding: 7px 8px; border-radius: 4px; background: var(--canvas); user-select: text; }
+.structured-export-path-row button { flex: none; }
+.structured-export-secondary { margin: 6px 0 0; }
+.structured-export-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.structured-export-totals, .structured-export-progress p { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.structured-export-retry-context { margin: 0; }
+.structured-export-examples { margin: -6px 0 0; padding-left: 17px; color: var(--muted); font-size: 12px; }
+.structured-export-examples:empty { display: none; }
+.structured-export-examples li { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.structured-export-progress, .structured-export-notice { margin: 8px 0 0; }
+.structured-export-progress { display: grid; gap: 5px; }
+.structured-export-progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.structured-export-result h3 { margin: 2px 0 8px; font-size: 15px; }
+.structured-export-result-path { margin: 0; color: var(--muted); user-select: text; overflow-wrap: anywhere; }
+.structured-export-failures { margin-top: 12px; }
+.structured-export-failures summary { cursor: pointer; font-weight: 600; }
+.structured-export-failures ul { margin: 6px 0 0; list-style: none; padding: 0; }
+.structured-export-failures li { display: grid; gap: 3px; padding: 7px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.structured-export-failures li span { color: var(--muted); font-size: 12px; }
+.structured-export-footer { display: flex; justify-content: flex-end; gap: 7px; padding: 9px 16px; border-top: 1px solid var(--line); }
+@media (max-width: 480px) {
+  .structured-export-body { padding-inline: 10px; }
+  .structured-export-path-row { flex-wrap: wrap; }
+  .structured-export-path { flex-basis: 100%; }
+}

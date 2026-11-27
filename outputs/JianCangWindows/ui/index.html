@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' jiancang:; media-src jiancang:; connect-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+    <title>见藏</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./asset-context-menu.css">
+    <link rel="stylesheet" href="./video-player.css">
+    <link rel="stylesheet" href="./audio-player.css">
+    <link rel="stylesheet" href="./image-comparison.css">
+    <link rel="stylesheet" href="./asset-filters.css">
+    <link rel="stylesheet" href="./local-organize.css">
+    <link rel="stylesheet" href="./local-import.css">
+    <link rel="stylesheet" href="./project-boards.css">
+    <link rel="stylesheet" href="./asset-suggestions.css">
+    <link rel="stylesheet" href="./library-diagnostics.css">
+    <link rel="stylesheet" href="./smart-tools.css">
+    <link rel="stylesheet" href="./asset-list.css">
+    <link rel="stylesheet" href="./duplicate-review.css">
+    <link rel="stylesheet" href="./tag-manager.css">
+    <link rel="stylesheet" href="./folder-inbox.css">
+    <link rel="stylesheet" href="./browser-capture.css">
+    <link rel="stylesheet" href="./offline-web.css">
+    <link rel="stylesheet" href="./structured-export.css">
+    <link rel="stylesheet" href="./image-tools.css">
+    <link rel="stylesheet" href="./video-trim.css">
+    <link rel="stylesheet" href="./local-backup.css">
+    <link rel="stylesheet" href="./storage-management.css">
+    <link rel="stylesheet" href="./cloud-originals.css">
+    <link rel="stylesheet" href="./sync-conflicts.css">
+    <link rel="stylesheet" href="./pdf-preview.css">
+    <link rel="stylesheet" href="./text-preview.css">
+    <link rel="stylesheet" href="./collection-finder.css">
+    <script src="./video-player.js" defer></script>
+    <script src="./continuous-gallery.js" defer></script>
+    <script src="./browse-workspace.js" defer></script>
+    <script src="./preview-transition.js" defer></script>
+    <script src="./image-comparison.js" defer></script>
+    <script src="./asset-filters.js" defer></script>
+    <script src="./local-organize.js" defer></script>
+    <script src="./local-import.js" defer></script>
+    <script src="./studio-documents.js" defer></script>
+    <script src="./project-boards.js" defer></script>
+    <script src="./asset-suggestions.js" defer></script>
+    <script src="./natural-image-search.js" defer></script>
+    <script src="./library-diagnostics.js" defer></script>
+    <script src="./smart-collections.js" defer></script>
+    <script src="./visual-tools.js" defer></script>
+    <script src="./duplicate-review.js" defer></script>
+    <script src="./tag-manager.js" defer></script>
+    <script src="./folder-inbox.js" defer></script>
+    <script src="./browser-capture.js" defer></script>
+    <script src="./offline-web.js" defer></script>
+    <script src="./structured-export.js" defer></script>
+    <script src="./image-tools.js" defer></script>
+    <script src="./image-conversion.js" defer></script>
+    <script src="./video-trim.js" defer></script>
+    <script src="./local-backup.js" defer></script>
+    <script src="./storage-management.js" defer></script>
+    <script src="./cloud-originals.js" defer></script>
+    <script src="./sync-conflicts.js" defer></script>
+    <script src="./pdf-preview.js" defer></script>
+    <script src="./text-preview.js" defer></script>
+    <script src="./collection-order.js" defer></script>
+    <script src="./collection-finder.js" defer></script>
+    <script src="./asset-search.js" defer></script>
+    <script src="./windows-update.js" defer></script>
+    <script src="./asset-context-menu.js" defer></script>
+    <script src="./renderer.js" defer></script>
+  </head>
+  <body>
+    <header class="app-bar">
+      <button type="button" class="brand" popovertarget="app-menu" data-app-menu-trigger
+        aria-label="见藏菜单" aria-controls="app-menu" aria-expanded="false">
+        <img src="./icon.png" alt="" width="32" height="32"><span>见藏</span><span class="brand-chevron" data-icon="chevronDown" aria-hidden="true"></span>
+      </button>
+      <div class="search" id="search-shell" hidden>
+        <button id="search-options-button" type="button" class="icon-button search-options-button" popovertarget="search-options"
+          aria-label="搜索范围和最近搜索" aria-controls="search-options" aria-expanded="false">
+          <span data-icon="search" aria-hidden="true"></span><span id="search-field-label" hidden></span>
+          <span class="search-chevron" data-icon="chevronDown" aria-hidden="true"></span>
+        </button>
+        <input id="search-input" type="text" aria-label="搜索素材" placeholder="搜索名称、标签、备注、来源或图片文字" maxlength="512" spellcheck="false" enterkeyhint="search" autocomplete="off">
+        <kbd id="search-key">Ctrl F</kbd>
+        <button id="clear-search" type="button" class="icon-button clear-search" aria-label="清除搜索" data-icon="close" hidden></button>
+        <div id="search-options" class="search-options" popover="auto" role="region" aria-label="搜索选项">
+          <section aria-labelledby="search-fields-title">
+            <h2 id="search-fields-title">搜索范围</h2>
+            <div class="search-fields">
+              <button type="button" data-search-field="all" aria-pressed="true">全部字段</button>
+              <button type="button" data-search-field="name" aria-pressed="false">名称</button>
+              <button type="button" data-search-field="tags" aria-pressed="false">标签</button>
+              <button type="button" data-search-field="note" aria-pressed="false">备注</button>
+              <button type="button" data-search-field="source" aria-pressed="false">来源网址</button>
+              <button type="button" data-search-field="site" aria-pressed="false">来源网站</button>
+              <button type="button" data-search-field="ocr" aria-pressed="false">图片文字</button>
+            </div>
+            <p class="search-syntax-hint">用 <kbd>"海边 日落"</kbd> 匹配短语，用 <kbd>-草稿</kbd> 排除词。</p>
+          </section>
+          <section class="recent-search-section" aria-labelledby="recent-searches-title">
+            <div class="recent-search-heading">
+              <h2 id="recent-searches-title">最近搜索</h2>
+              <button id="clear-recent-searches" type="button" class="search-option-action" hidden>清除记录</button>
+            </div>
+            <p id="recent-searches-empty">按 Enter 提交搜索后，记录会显示在这里。</p>
+            <div id="confirm-clear-searches" class="confirm-clear-searches" hidden>
+              <p>清除这台电脑的最近搜索？</p>
+              <button id="cancel-clear-searches" type="button" class="search-option-action">取消</button>
+              <button id="accept-clear-searches" type="button" class="search-option-action">确认清除</button>
+            </div>
+            <ul id="recent-searches" class="recent-searches"></ul>
+          </section>
+        </div>
+      </div>
+      <div class="bar-actions">
+        <button id="project-boards-button" type="button" class="tool-button" title="项目灵感板" hidden><span data-icon="layout" aria-hidden="true"></span><span class="tool-label">灵感板</span></button>
+        <button id="local-import-button" type="button" class="tool-button local-import-button" title="导入与队列" hidden><span data-icon="tray" aria-hidden="true"></span><span class="tool-label">导入</span><span id="local-import-count" class="import-count" hidden></span></button>
+        <button id="local-undo-button" type="button" class="icon-button" aria-label="撤销整理" title="撤销上一步整理（Ctrl+Z）" data-icon="undo" hidden></button>
+        <button id="local-redo-button" type="button" class="icon-button" aria-label="重做整理" title="重做刚撤销的整理（Ctrl+Y）" data-icon="redo" hidden></button>
+        <button id="refresh-button" type="button" class="tool-button" title="刷新素材库" aria-label="刷新素材库" hidden><span data-icon="refresh" aria-hidden="true"></span><span class="tool-label">刷新</span></button>
+        <button id="toggle-inspector" type="button" class="icon-button" aria-label="显示详情栏" aria-pressed="true" data-icon="inspector" hidden></button>
+        <button id="theme-button" type="button" class="icon-button" aria-label="切换黑白主题" aria-pressed="false" data-icon="moon"></button>
+        <button id="shortcut-help" type="button" class="icon-button" aria-label="帮助与版本" title="帮助与版本（F1）" data-icon="help"></button>
+      </div>
+    </header>
+
+    <main class="connect-page" id="workspace-startup" aria-label="启动见藏">
+      <div class="workspace-startup-status">
+        <p id="workspace-startup-message" role="status">正在读取素材库…</p>
+        <button id="retry-workspace-startup" type="button" class="outline-button" hidden>重试读取</button>
+      </div>
+    </main>
+
+    <main class="connect-page" id="connection-page" aria-labelledby="connect-title" hidden>
+      <div class="connect-card">
+        <div class="connect-mark" data-icon="folderOpen" aria-hidden="true"></div>
+        <h1 id="connect-title">打开素材库</h1>
+        <p>创建本地素材库，或打开已有的见藏和 Eagle 素材库。</p>
+        <div class="connect-actions">
+          <button id="connect-create-local" type="button" class="outline-button"><span data-icon="plus" aria-hidden="true"></span>新建本地库</button>
+          <button id="connect-button" type="button" class="primary-button"><span data-icon="folderOpen" aria-hidden="true"></span>选择素材库文件夹</button>
+          <button id="connect-restore-backup" type="button" class="outline-button">从备份恢复</button>
+          <button id="recover-libraries-button" type="button" class="outline-button" hidden>已添加的库</button>
+        </div>
+        <p id="connection-message" class="connection-message" role="status" hidden></p>
+        <div class="library-open-actions" hidden>
+          <button type="button" class="outline-button" data-library-open-action="cancel" hidden>取消读取</button>
+          <button type="button" class="outline-button" data-library-open-action="reveal" hidden>在资源管理器中打开文件夹</button>
+        </div>
+      </div>
+    </main>
+
+    <div class="workspace" id="workspace" hidden>
+      <aside class="sidebar" id="library-sidebar" aria-label="素材库导航">
+        <div class="sidebar-scroll">
+          <div class="library-heading">
+            <h2>素材库</h2>
+            <button id="manage-libraries-button" type="button" class="icon-button" aria-label="管理素材库" title="管理素材库（Ctrl+L）" data-icon="more"></button>
+          </div>
+          <nav id="saved-libraries" class="saved-libraries" aria-label="已添加的素材库"></nav>
+          <nav id="library-views" aria-label="素材分类"></nav>
+          <nav class="review-tools" aria-label="素材整理">
+            <div class="navigation-row"><button id="tag-manager-button" type="button" class="navigation-button"><span data-icon="untagged" aria-hidden="true"></span><span class="navigation-name">标签管理</span></button></div>
+            <div class="navigation-row"><button id="duplicate-review-button" type="button" class="navigation-button"><span data-icon="compare" aria-hidden="true"></span><span class="navigation-name">重复素材整理</span></button></div>
+            <div class="navigation-row"><button id="folder-inbox-button" type="button" class="navigation-button"><span data-icon="folderOpen" aria-hidden="true"></span><span class="navigation-name">监视文件夹</span></button></div>
+          </nav>
+          <div id="smart-collection-heading" class="collection-heading">
+            <h2>智能集合</h2>
+            <button id="save-smart-collection" type="button" class="icon-button" aria-label="保存当前筛选为智能集合" title="保存当前筛选为智能集合" data-icon="plus"></button>
+          </div>
+          <nav id="smart-collection-list" aria-label="智能集合" hidden></nav>
+          <div class="collection-heading">
+            <h2 class="collections-label">集合</h2>
+            <div class="collection-heading-actions">
+              <button id="find-collection" type="button" class="icon-button" aria-label="查找集合" title="查找集合（Ctrl+Shift+F）" data-icon="search"></button>
+              <button id="new-local-collection" type="button" class="icon-button" aria-label="新建集合" title="新建集合" data-icon="plus" hidden></button>
+            </div>
+          </div>
+          <nav id="collection-tree" aria-label="集合"></nav>
+        </div>
+      </aside>
+
+      <div id="sidebar-resize" class="sidebar-resize" role="separator" aria-label="调整素材导航宽度" aria-orientation="vertical" aria-controls="library-sidebar" tabindex="0"></div>
+      <main class="browser" id="browser" aria-labelledby="gallery-title">
+        <header class="gallery-toolbar">
+          <div class="gallery-location">
+            <div class="gallery-history" role="group" aria-label="浏览历史">
+              <button id="browse-back" type="button" class="icon-button" aria-label="浏览后退" title="浏览后退（Alt+←）" aria-keyshortcuts="Alt+ArrowLeft" data-icon="chevronLeft" disabled></button>
+              <button id="browse-forward" type="button" class="icon-button" aria-label="浏览前进" title="浏览前进（Alt+→）" aria-keyshortcuts="Alt+ArrowRight" data-icon="chevronRight" disabled></button>
+            </div>
+            <div class="gallery-heading">
+              <div id="collection-parents" class="breadcrumbs" hidden></div>
+              <h1 id="gallery-title" tabindex="-1">全部素材</h1>
+              <span class="count" id="gallery-count" role="status"></span>
+            </div>
+          </div>
+          <div class="gallery-options">
+            <button id="retry-local-trash" type="button" class="outline-button" hidden>继续清理</button>
+            <button id="empty-local-trash" type="button" class="outline-button is-local-action" hidden>清空回收站</button>
+            <button id="clear-selection-stash" type="button" class="outline-button" hidden>清空暂存</button>
+            <select id="kind-filter" aria-label="文件类型">
+              <option value="all">所有类型</option>
+              <option value="image">图片</option>
+              <option value="video">视频</option>
+              <option value="audio">音频</option>
+              <option value="pdf">PDF</option>
+              <option value="document">文件</option>
+              <option value="link">链接</option>
+            </select>
+            <select id="sort-select" aria-label="排序方式">
+              <option value="recent">最近添加</option>
+              <option value="name">按名称</option>
+              <option value="format">按格式</option>
+              <option value="dimensions">按尺寸</option>
+              <option value="rating">按评分</option>
+              <option value="size">按大小</option>
+              <option value="date" hidden>按添加日期</option>
+            </select>
+            <span id="advanced-filter-slot"></span>
+            <span id="visual-filter-slot"></span>
+            <span class="options-divider" aria-hidden="true"></span>
+            <label class="layout-control"><span data-icon="layout" aria-hidden="true"></span>
+              <select id="layout-select" aria-label="浏览布局">
+                <option value="masonry">瀑布流</option>
+                <option value="rows">等高</option>
+                <option value="list">列表</option>
+              </select>
+            </label>
+            <label class="thumbnail-control" title="调节缩略图大小">
+              <span data-icon="image" aria-hidden="true"></span>
+              <input id="thumbnail-size" type="range" min="108" max="310" step="2" value="170" aria-label="缩略图大小">
+            </label>
+            <button id="toggle-captions" type="button" class="icon-button" aria-label="显示素材名称" aria-pressed="true" title="显示素材名称" data-icon="captions"></button>
+          </div>
+        </header>
+        <section id="gallery-import-preview" class="gallery-import-preview" aria-label="导入进度" hidden>
+          <div class="gallery-import-heading">
+            <span id="gallery-import-summary" role="status"></span>
+            <button id="gallery-import-queue" type="button" class="outline-button">查看导入队列</button>
+          </div>
+          <ul id="gallery-import-cards" class="gallery-import-cards" aria-label="导入任务"></ul>
+        </section>
+        <div class="gallery-scroll" id="gallery-scroll">
+          <div id="asset-list-header" class="asset-list-header" role="group" aria-label="列表列排序" hidden>
+            <button type="button" data-list-sort="name">名称</button>
+            <button type="button" data-list-sort="format">格式</button>
+            <button type="button" data-list-sort="dimensions">尺寸</button>
+            <button type="button" data-list-sort="size">大小</button>
+            <button type="button" data-list-sort="rating">评分</button>
+            <button type="button" data-list-sort="date">添加日期</button>
+          </div>
+          <div id="asset-grid" class="asset-grid" aria-label="素材"></div>
+          <div id="empty-results" class="empty-results" hidden></div>
+        </div>
+        <section id="viewer" class="viewer" aria-label="素材预览" hidden>
+          <header class="viewer-toolbar">
+            <button type="button" class="brand viewer-brand" popovertarget="app-menu" data-app-menu-trigger
+              aria-label="见藏菜单" aria-controls="app-menu" aria-expanded="false">
+              <img src="./icon.png" alt="" width="27" height="27"><span>见藏</span><span class="brand-chevron" data-icon="chevronDown" aria-hidden="true"></span>
+            </button>
+            <div class="viewer-heading">
+              <button id="viewer-close" type="button" class="icon-button" aria-label="返回素材列表" title="返回素材列表（空格或 Esc）" data-icon="back"></button>
+              <span id="viewer-position" role="status"></span>
+            </div>
+            <div id="viewer-zoom-controls" class="viewer-zoom-controls">
+              <button id="viewer-fit" type="button" class="viewer-text-button" aria-pressed="true">适应窗口</button>
+              <button id="viewer-actual" type="button" class="viewer-text-button" aria-label="原始大小" title="原始大小" aria-pressed="false">1:1</button>
+              <input id="viewer-zoom" type="range" min="0" max="100" value="0" aria-label="预览缩放">
+              <span id="viewer-zoom-value" class="viewer-zoom-value"></span>
+            </div>
+            <div class="viewer-tools">
+              <button id="viewer-export" type="button" class="icon-button" aria-label="导出原件" title="导出原件" data-icon="export"></button>
+              <button id="viewer-image-tools" type="button" class="icon-button" aria-label="图片工具" title="图片工具" data-icon="edit" hidden></button>
+              <button id="viewer-video-trim" type="button" class="icon-button" aria-label="裁剪视频" title="裁剪视频" data-icon="trim" hidden></button>
+              <button id="viewer-quick-favorite" type="button" class="icon-button quick-favorite" aria-label="收藏" aria-pressed="false" title="加入收藏" data-icon="star" hidden></button>
+              <button id="viewer-reveal" type="button" class="icon-button" aria-label="在资源管理器中定位" title="在资源管理器中定位" data-icon="external"></button>
+              <button id="viewer-local-trash" type="button" class="icon-button" aria-label="移到回收站" title="移到回收站" data-icon="trash" hidden></button>
+              <button id="viewer-inspector" type="button" class="icon-button" aria-label="显示详情栏" aria-pressed="true" title="切换详情栏" data-icon="inspector"></button>
+              <button id="viewer-focus" type="button" class="icon-button" aria-label="专注模式" aria-pressed="false" title="专注模式（F）" data-icon="expand"></button>
+              <button id="viewer-theme" type="button" class="icon-button" aria-label="切换黑白主题" aria-pressed="false" data-icon="moon"></button>
+              <button id="viewer-previous" type="button" class="icon-button" aria-label="上一项" title="上一项（←）" data-icon="chevronLeft"></button>
+              <button id="viewer-next" type="button" class="icon-button" aria-label="下一项" title="下一项（→）" data-icon="chevronRight"></button>
+            </div>
+          </header>
+          <div id="viewer-viewport" class="viewer-viewport" aria-label="大图画布" tabindex="-1">
+            <div id="viewer-media" class="viewer-media"></div>
+          </div>
+        </section>
+      </main>
+
+      <div id="inspector-resize" class="inspector-resize" role="separator" aria-label="调整详情栏宽度" aria-orientation="vertical" aria-controls="preview-panel" tabindex="0" hidden></div>
+      <aside class="preview-panel" id="preview-panel" aria-label="素材详情" hidden></aside>
+
+      <footer class="status-bar">
+        <span class="status-left"><span class="status-dot" aria-hidden="true"></span><span id="status-text" role="status"></span></span>
+        <div class="status-tools"><button id="sync-status-button" type="button" class="status-button" hidden></button><button type="button" id="warnings-button" class="status-button" hidden></button></div>
+      </footer>
+    </div>
+
+    <dialog id="libraries-dialog" class="libraries-dialog" aria-labelledby="libraries-title">
+      <div class="dialog-head">
+        <h2 id="libraries-title">管理素材库</h2>
+        <button id="close-libraries-button" type="button" class="icon-button" aria-label="关闭素材库管理" data-icon="close"></button>
+      </div>
+      <div id="library-management-list" class="library-management-list"></div>
+      <p id="library-management-message" class="library-management-message" role="status" hidden></p>
+      <div class="library-open-actions" hidden>
+        <button type="button" class="outline-button" data-library-open-action="cancel" hidden>取消读取</button>
+        <button type="button" class="outline-button" data-library-open-action="reveal" hidden>在资源管理器中打开文件夹</button>
+      </div>
+      <div class="library-dialog-actions">
+        <button id="cloud-originals-button" type="button" class="outline-button" hidden><span data-icon="cloudDownload" aria-hidden="true"></span>批量取回原件</button>
+        <button id="suggestions-settings-button" type="button" class="outline-button"><span data-icon="edit" aria-hidden="true"></span>AI 接口设置</button>
+        <button id="create-local-library" type="button" class="primary-button"><span data-icon="plus" aria-hidden="true"></span>新建本地库</button>
+        <button id="open-local-library" type="button" class="outline-button"><span data-icon="folderOpen" aria-hidden="true"></span>打开本地库</button>
+        <button id="local-backup-button" type="button" class="outline-button">备份与恢复</button>
+        <button id="storage-management-button" type="button" class="outline-button">存储管理</button>
+        <button id="add-sync-library" type="button" class="outline-button"><span data-icon="cloud" aria-hidden="true"></span>添加见藏同步库</button>
+        <button id="add-eagle-library" type="button" class="outline-button"><span data-icon="eagle" aria-hidden="true"></span>添加 Eagle 库</button>
+      </div>
+    </dialog>
+    <dialog id="browser-capture-dialog" class="browser-capture-dialog" aria-labelledby="browser-capture-heading">
+      <header class="dialog-head">
+        <h2 id="browser-capture-heading">浏览器采集</h2>
+        <button id="browser-capture-close" type="button" class="icon-button" data-icon="close" aria-label="关闭"></button>
+      </header>
+      <div class="browser-capture-body">
+        <form id="browser-capture-form" class="browser-capture-form">
+          <div class="browser-capture-fields">
+            <label class="intake-field">默认素材库<select id="browser-capture-library" required></select></label>
+            <label class="intake-field">默认集合<select id="browser-capture-collection"></select></label>
+          </div>
+          <div class="browser-capture-actions">
+            <button id="browser-capture-disable" type="button" class="outline-button" hidden>关闭采集</button>
+            <button id="browser-capture-save" type="submit" class="primary-button">启用采集</button>
+          </div>
+        </form>
+        <details id="browser-capture-rules" class="browser-capture-rules">
+          <summary>自动归档规则</summary>
+          <p class="browser-capture-rule-hint">从上往下使用第一条符合全部条件的规则。采集时可临时改选保存位置。</p>
+          <p id="browser-capture-rules-message" class="browser-capture-rule-error" role="alert" hidden></p>
+          <ol id="browser-capture-rules-list" aria-label="按优先级排列的归档规则"></ol>
+          <div class="browser-capture-actions">
+            <button id="browser-capture-rule-add" type="button" class="outline-button">添加规则</button>
+          </div>
+          <form id="browser-capture-rule-editor" class="browser-capture-form" hidden>
+            <label class="intake-field">规则名称<input id="browser-capture-rule-name" required maxlength="160"></label>
+            <div class="browser-capture-fields">
+              <label class="intake-field">来源网站域名<input id="browser-capture-rule-domain" maxlength="506" placeholder="example.com" spellcheck="false"></label>
+              <label class="intake-field">网址关键词<input id="browser-capture-rule-keyword" maxlength="512" placeholder="例如 /notes/"></label>
+            </div>
+            <label class="intake-field">采集类型
+              <select id="browser-capture-rule-kind">
+                <option value="any">不限</option>
+                <option value="image">图片</option>
+                <option value="page">网页</option>
+                <option value="link">链接</option>
+                <option value="jpg">JPEG 图片</option>
+                <option value="png">PNG 图片</option>
+                <option value="gif">GIF 图片</option>
+                <option value="webp">WebP 图片</option>
+                <option value="avif">AVIF 图片</option>
+                <option value="bmp">BMP 图片</option>
+              </select>
+            </label>
+            <p class="browser-capture-rule-hint">域名包含其子域名。图片格式按网址后缀或格式参数识别。</p>
+            <div class="browser-capture-fields">
+              <label class="intake-field">保存到素材库<select id="browser-capture-rule-library" required></select></label>
+              <label class="intake-field">保存到集合<select id="browser-capture-rule-collection"></select></label>
+            </div>
+            <label class="intake-field">预设标签<input id="browser-capture-rule-tags" maxlength="8192" placeholder="多个标签用逗号分开"></label>
+            <div class="browser-capture-actions">
+              <button id="browser-capture-rule-cancel" type="button" class="outline-button">取消</button>
+              <button id="browser-capture-rule-save" type="submit" class="primary-button">保存规则</button>
+            </div>
+          </form>
+        </details>
+        <details id="browser-capture-history" class="browser-capture-history">
+          <summary>采集历史</summary>
+          <p id="browser-capture-history-status" role="status"></p>
+          <ol id="browser-capture-history-rows" aria-label="最近保存的采集记录"></ol>
+        </details>
+        <section class="browser-capture-setup" aria-labelledby="browser-capture-setup-title">
+          <h3 id="browser-capture-setup-title">连接 Edge 或 Chrome</h3>
+          <p>在浏览器扩展管理页开启开发人员模式，选择「加载解压缩的扩展」，再选择下方打开的文件夹。拖图采集默认开启。</p>
+          <div class="browser-capture-actions">
+            <button id="browser-capture-folder" type="button" class="outline-button">打开扩展文件夹</button>
+          </div>
+          <p>从此文件夹加载的扩展会随见藏更新，采集空闲时自动重新加载。</p>
+          <p>首次采集或点击浏览器工具栏的见藏图标时，在见藏里允许连接。拖动网页图片即可选择保存位置，也可在网页中右键快速保存。</p>
+          <div class="browser-capture-actions browser-capture-connection">
+            <span id="browser-capture-status" role="status"></span>
+            <button id="browser-capture-revoke" type="button" class="outline-button" hidden>解除全部浏览器连接</button>
+          </div>
+        </section>
+        <p id="browser-capture-error" role="alert" hidden></p>
+      </div>
+    </dialog>
+    <dialog id="shortcut-dialog" class="local-intake-dialog" aria-labelledby="shortcut-title">
+      <div class="dialog-head">
+        <h2 id="shortcut-title">帮助</h2>
+        <button id="shortcut-close" type="button" class="icon-button" aria-label="关闭帮助" data-icon="close"></button>
+      </div>
+      <section class="help-about" aria-labelledby="help-about-title">
+        <h3 id="help-about-title">关于见藏</h3>
+        <span id="help-app-version" role="status">正在读取版本…</span>
+        <div class="help-preset-migration" id="help-preset-migration" hidden>
+          <button id="help-import-presets" type="button" class="outline-button" aria-describedby="help-preset-result">导入旧版预设</button>
+          <span id="help-preset-result" role="status">批量改名、原件导出和图片导出</span>
+        </div>
+      </section>
+      <dl class="local-intake-body shortcut-list" aria-label="键盘快捷键">
+        <dt>搜索素材</dt><dd><kbd>Ctrl</kbd> + <kbd>F</kbd> / <kbd>/</kbd></dd>
+        <dt>查找集合</dt><dd><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></dd>
+        <dt>浏览后退或前进</dt><dd><kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>→</kbd></dd>
+        <dt>管理素材库</dt><dd><kbd>Ctrl</kbd> + <kbd>L</kbd></dd>
+        <dt>打开导入与队列</dt><dd><kbd>Ctrl</kbd> + <kbd>I</kbd></dd>
+        <dt>粘贴图片或网址到素材库</dt><dd><kbd>Ctrl</kbd> + <kbd>V</kbd></dd>
+        <dt>浏览素材</dt><dd>方向键 / <kbd>Home</kbd> / <kbd>End</kbd></dd>
+        <dt>评分 / 清除评分</dt><dd><kbd>1</kbd>–<kbd>5</kbd> / <kbd>0</kbd></dd>
+        <dt><label for="keyboard-rating-auto-advance">评分后自动跳下一张</label></dt>
+        <dd><input id="keyboard-rating-auto-advance" type="checkbox"></dd>
+        <dt>打开或关闭图片预览</dt><dd><kbd>Space</kbd></dd>
+        <dt>播放或暂停音频、视频</dt><dd><kbd>Space</kbd></dd>
+        <dt>音频快退、快进 5 秒</dt><dd><kbd>J</kbd> / <kbd>L</kbd></dd>
+        <dt>PDF 大预览翻页</dt><dd><kbd>Page Up</kbd> / <kbd>Page Down</kbd></dd>
+        <dt>退出预览</dt><dd><kbd>Esc</kbd></dd>
+        <dt>切换专注模式</dt><dd><kbd>F</kbd></dd>
+        <dt>重命名选中素材</dt><dd><kbd>F2</kbd></dd>
+        <dt>移到回收站</dt><dd><kbd>Delete</kbd></dd>
+        <dt>框选素材</dt><dd>从素材间的空白处拖动</dd>
+        <dt>切换选中状态 / 连续选择</dt><dd><kbd>Ctrl</kbd> + 单击 / <kbd>Shift</kbd> + 单击</dd>
+        <dt>全选当前结果</dt><dd><kbd>Ctrl</kbd> + <kbd>A</kbd></dd>
+        <dt>撤销本地库上一步整理</dt><dd><kbd>Ctrl</kbd> + <kbd>Z</kbd></dd>
+        <dt>重做本地库上一步整理</dt><dd><kbd>Ctrl</kbd> + <kbd>Y</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd></dd>
+      </dl>
+    </dialog>
+    <dialog id="collection-finder" class="local-intake-dialog collection-finder" aria-labelledby="collection-finder-title">
+      <div class="dialog-head">
+        <h2 id="collection-finder-title">查找集合</h2>
+        <button type="button" class="icon-button" aria-label="关闭查找集合" data-icon="close"></button>
+      </div>
+      <div class="local-intake-body">
+        <div class="intake-field"><input type="text" role="combobox" aria-autocomplete="list" aria-expanded="false"
+          aria-controls="collection-finder-list" aria-label="搜索集合名称或路径" placeholder="输入集合名称、上级集合或素材库名称"
+          maxlength="140" autocomplete="off" spellcheck="false" autofocus></div>
+        <ul class="collection-finder-list" id="collection-finder-list" role="listbox" aria-label="匹配的集合" hidden></ul>
+        <div class="collection-finder-footer">
+          <p class="collection-finder-status" role="status"></p>
+          <button type="button" class="outline-button" id="collection-finder-pin" aria-keyshortcuts="Control+Enter" disabled>加入常用</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="sync-write-dialog" class="local-intake-dialog" aria-labelledby="sync-write-title">
+      <div class="dialog-head"><h2 id="sync-write-title">同步状态</h2><button id="sync-write-close" type="button" class="icon-button" aria-label="关闭同步状态" data-icon="close"></button></div>
+      <div class="local-intake-body">
+        <p class="sync-write-description" id="sync-write-description"></p>
+        <dl id="sync-write-details" class="sync-write-details"></dl>
+        <div class="sync-write-location">
+          <p class="sync-write-description" id="sync-write-cloud-help"></p>
+          <div class="local-intake-actions">
+            <button id="sync-write-reveal-folder" type="button" class="outline-button">打开同步文件夹</button>
+            <button id="sync-write-reveal-latest" type="button" class="outline-button" hidden>定位最新记录</button>
+          </div>
+        </div>
+        <p class="local-intake-error" id="sync-write-error" role="status" hidden></p>
+        <div class="local-intake-actions sync-write-actions">
+          <button id="sync-write-toggle" type="button" class="primary-button">开启双向同步</button>
+          <button id="sync-write-retry" type="button" class="outline-button" hidden>立即同步</button>
+          <button id="sync-write-originals" type="button" class="outline-button">取回原件</button>
+          <button id="sync-write-conflicts" type="button" class="outline-button" hidden>查看冲突</button>
+        </div>
+      </div>
+    </dialog>
+    <div id="app-menu" class="app-menu" popover="auto" role="region" aria-label="见藏菜单">
+      <div class="app-menu-group" role="group" aria-label="素材库">
+        <button type="button" class="app-menu-command" data-app-command="manage-libraries-button" autofocus>
+          <span data-icon="libraries" aria-hidden="true"></span><span>管理素材库</span><kbd>Ctrl + L</kbd>
+        </button>
+        <button type="button" class="app-menu-command" data-app-command="local-import-button">
+          <span data-icon="tray" aria-hidden="true"></span><span>导入与队列</span><kbd>Ctrl + I</kbd>
+        </button>
+        <button id="open-browser-capture" type="button" class="app-menu-command" aria-haspopup="dialog">
+          <span data-icon="link" aria-hidden="true"></span><span>浏览器采集</span>
+        </button>
+        <button type="button" class="app-menu-command" data-app-command="refresh-button">
+          <span data-icon="refresh" aria-hidden="true"></span><span>刷新素材库</span>
+        </button>
+        <button type="button" class="app-menu-command" data-app-command="project-boards-button">
+          <span data-icon="layout" aria-hidden="true"></span><span>灵感板</span>
+        </button>
+      </div>
+      <div class="app-menu-group" role="group" aria-label="显示">
+        <button type="button" class="app-menu-command" data-app-command="toggle-inspector" data-app-command-title>
+          <span data-icon="inspector" aria-hidden="true"></span><span data-app-command-label>显示详情栏</span>
+        </button>
+        <button type="button" class="app-menu-command" data-app-command="theme-button" data-app-command-title>
+          <span data-icon="moon" aria-hidden="true"></span><span data-app-command-label>切换主题</span>
+        </button>
+      </div>
+      <div class="app-menu-group" role="group" aria-label="帮助">
+        <button type="button" class="app-menu-command" data-app-command="shortcut-help">
+          <span data-icon="help" aria-hidden="true"></span><span>帮助与快捷键</span><kbd>F1</kbd>
+        </button>
+      </div>
+      <section id="app-menu-update" class="app-menu-group" aria-label="软件维护">
+        <button id="open-windows-update" type="button" class="app-menu-command" aria-haspopup="dialog" aria-controls="windows-update-dialog">
+          <span data-icon="refresh" aria-hidden="true"></span><span>软件更新</span>
+        </button>
+        <details id="windows-installation" hidden>
+          <summary class="app-menu-command"><span data-icon="folder" aria-hidden="true"></span><span>安装与卸载</span>
+            <span data-icon="chevronDown" aria-hidden="true"></span></summary>
+          <div class="app-menu-detail">
+            <p id="windows-installation-label"></p>
+            <p id="windows-installation-path" class="app-installation-path"></p>
+            <div class="app-maintenance-actions">
+              <button id="windows-installation-location" type="button" class="outline-button">打开位置</button>
+              <button id="windows-installation-install" type="button" class="outline-button" hidden>安装</button>
+              <button id="windows-installation-uninstall" type="button" class="outline-button" hidden>卸载见藏</button>
+            </div>
+            <p id="windows-installation-status" role="status" hidden></p>
+          </div>
+        </details>
+      </section>
+    </div>
+    <dialog id="windows-update-dialog" class="windows-update-dialog" aria-labelledby="windows-update-heading">
+      <header class="dialog-head">
+        <div class="windows-update-heading">
+          <h2 id="windows-update-heading">检查更新</h2>
+          <p id="windows-update-version">正在读取版本…</p>
+        </div>
+        <button id="windows-update-dismiss" type="button" class="icon-button" data-icon="close" aria-label="关闭更新窗口"></button>
+      </header>
+      <div class="windows-update-body">
+        <p id="windows-update-status" role="status" hidden></p>
+        <p id="windows-update-package-size" hidden></p>
+        <progress id="windows-update-progress" aria-label="更新下载进度" hidden></progress>
+        <div id="windows-update-transfer" class="app-update-transfer" hidden>
+          <span id="windows-update-bytes"></span>
+          <span id="windows-update-speed"></span>
+          <span id="windows-update-percentage"></span>
+        </div>
+        <details id="windows-update-settings" hidden>
+          <summary>更新设置</summary>
+          <p id="windows-update-source" class="muted"></p>
+          <form id="windows-update-form" class="intake-field">
+            <label for="windows-update-url">GitHub 仓库或 HTTPS 更新目录</label>
+            <input id="windows-update-url" type="url" maxlength="2048" placeholder="https://github.com/用户名/仓库">
+            <div class="app-maintenance-actions">
+              <button type="submit" class="outline-button">保存网址</button>
+              <button id="windows-update-folder" type="button" class="outline-button">选择更新文件夹</button>
+              <button id="windows-update-clear" type="button" class="outline-button" hidden>移除通道</button>
+              <button id="windows-update-restore" type="button" class="outline-button" hidden>恢复官方通道</button>
+            </div>
+          </form>
+          <label class="windows-update-automatic"><input id="windows-update-automatic" type="checkbox"> 打开见藏后自动检查</label>
+        </details>
+      </div>
+      <footer class="windows-update-actions">
+        <button id="windows-update-retry" type="button" class="outline-button" hidden>重新检查</button>
+        <button id="windows-update-cancel" type="button" class="outline-button" hidden>取消下载</button>
+        <button id="windows-update-open-release" type="button" class="outline-button" hidden>在浏览器下载</button>
+        <button id="windows-update-install" type="button" class="primary-button" hidden>下载并安装</button>
+        <button id="windows-update-done" type="button" class="primary-button" autofocus>确定</button>
+      </footer>
+    </dialog>
+    <div id="collection-menu" class="collection-menu" popover="auto" role="menu" aria-labelledby="collection-menu-title">
+      <p id="collection-menu-title"></p>
+      <button id="collection-menu-open" type="button" role="menuitem">查看此集合</button>
+      <button id="collection-menu-pin" type="button" role="menuitem">加入常用</button>
+      <button id="collection-menu-add-selection" type="button" role="menuitem" hidden>将所选素材加入此集合</button>
+      <button id="collection-menu-toggle" type="button" role="menuitem" hidden></button>
+      <button id="collection-menu-export" type="button" role="menuitem">导出集合素材…</button>
+      <button id="collection-menu-copy-name" type="button" role="menuitem">复制集合名称</button>
+      <button id="collection-menu-reveal" type="button" role="menuitem">定位素材库</button>
+      <button id="collection-menu-create" type="button" role="menuitem">新增文件夹…</button>
+      <button id="collection-menu-child" type="button" role="menuitem">新增子文件夹…</button>
+      <button id="collection-menu-edit" type="button" role="menuitem">重命名…</button>
+      <button id="collection-menu-move" type="button" role="menuitem">移动文件夹…</button>
+      <button id="collection-order-up" type="button" role="menuitem">上移</button>
+      <button id="collection-order-down" type="button" role="menuitem">下移</button>
+      <button id="collection-order-reset" type="button" role="menuitem">同级恢复按名称排序</button>
+      <div id="collection-menu-colors" class="collection-menu-colors" role="group" aria-labelledby="collection-menu-colors-label" hidden>
+        <p id="collection-menu-colors-label">文件夹颜色</p>
+        <div class="collection-menu-swatches"></div>
+      </div>
+      <button id="collection-menu-delete" type="button" role="menuitem">删除文件夹…</button>
+    </div>
+    <dialog id="local-create-dialog" class="local-intake-dialog" aria-labelledby="local-create-title">
+      <div class="dialog-head"><h2 id="local-create-title">新建本地素材库</h2><button id="local-create-close" type="button" class="icon-button" aria-label="取消" data-icon="close"></button></div>
+      <form id="local-create-form" class="local-intake-body">
+        <label class="intake-field">素材库名称<input id="local-create-name" type="text" required autocomplete="off" maxlength="80" placeholder="我的素材库"></label>
+        <p class="local-intake-error" id="local-create-error" role="status" hidden></p>
+        <div class="local-intake-actions"><button id="local-create-submit" type="submit" class="primary-button">选择存放位置</button></div>
+      </form>
+    </dialog>
+    <dialog id="local-import-dialog" class="local-intake-dialog local-import-dialog" aria-labelledby="local-import-title">
+      <div class="dialog-head"><h2 id="local-import-title">导入素材</h2><button id="local-import-close" type="button" class="icon-button" aria-label="关闭导入" data-icon="close"></button></div>
+      <div class="local-intake-body">
+        <div class="local-intake-target">
+          <label class="intake-field">目标素材库<select id="local-import-target"></select></label>
+          <label class="intake-field">导入到<select id="local-import-collection"></select></label>
+        </div>
+        <div class="local-intake-actions" id="local-import-actions">
+          <button id="local-import-files" type="button" class="outline-button">选择文件</button>
+          <button id="local-import-folders" type="button" class="outline-button">选择文件夹</button>
+          <button id="local-import-paste" type="button" class="outline-button">粘贴图片或网址</button>
+        </div>
+        <div class="local-intake-actions" id="local-copy-actions" hidden>
+          <label><input id="local-copy-preserve" type="checkbox" checked> 保留原集合层级</label>
+          <button id="local-copy-submit" type="button" class="primary-button">复制素材</button>
+        </div>
+        <p class="local-intake-error" id="local-import-error" role="status" hidden></p>
+        <section class="local-queue" id="local-import-queue" aria-labelledby="local-queue-title">
+          <div class="local-queue-heading"><h3 id="local-queue-title">导入队列</h3><span id="local-queue-summary" role="status"></span></div>
+          <div class="local-queue-controls">
+            <button id="local-queue-pause" class="outline-button" type="button" disabled>暂停队列</button>
+            <button id="local-queue-retry-failed" class="outline-button" type="button" disabled>重试全部失败项</button>
+            <button id="local-queue-cancel-pending" class="outline-button" type="button" disabled>取消全部等待任务</button>
+          </div>
+          <div class="local-queue-filters">
+            <label class="intake-field">任务状态<select id="local-queue-status" disabled>
+              <option value="all">所有任务</option>
+              <option value="pending">待导入</option>
+              <option value="running">正在导入</option>
+              <option value="failed">失败</option>
+              <option value="done">已完成</option>
+            </select></label>
+            <label class="intake-field">搜索任务<input id="local-queue-search" type="search" autocomplete="off" maxlength="160" placeholder="文件名或错误原因" disabled></label>
+          </div>
+          <p id="local-queue-feedback" class="local-queue-feedback" role="status" hidden></p>
+          <p id="local-queue-results" class="local-queue-results" role="status" hidden></p>
+          <p id="local-queue-history" class="local-queue-results" hidden></p>
+          <ul id="local-queue-list"></ul>
+          <button id="local-queue-more" type="button" class="status-button" hidden>显示更多</button>
+        </section>
+      </div>
+    </dialog>
+    <dialog id="local-import-cancel-dialog" class="local-intake-dialog import-cancel-dialog" aria-labelledby="local-import-cancel-title" aria-describedby="local-import-cancel-detail">
+      <div class="dialog-head"><h2 id="local-import-cancel-title">取消导入任务？</h2></div>
+      <div class="local-intake-body">
+        <p id="local-import-cancel-detail"></p>
+        <div class="local-intake-actions">
+          <button id="local-import-cancel-back" type="button" class="outline-button" autofocus>返回</button>
+          <button id="local-import-cancel-confirm" type="button" class="primary-button">确认取消任务</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="warnings-dialog" class="warnings-dialog reading-dialog" aria-labelledby="warnings-title" aria-describedby="warnings-summary">
+      <div class="warnings-head"><h2 id="warnings-title">读取提示</h2><button type="button" id="close-warnings-button" class="icon-button" aria-label="关闭提示" data-icon="close"></button></div>
+      <p id="warnings-summary" class="reading-summary" role="status"></p>
+      <div id="warnings-list" class="reading-groups"></div>
+    </dialog>
+    <dialog id="export-results-dialog" class="warnings-dialog" aria-labelledby="export-results-title">
+      <div class="dialog-head"><h2 id="export-results-title">导出结果</h2><button type="button" id="close-export-results" class="icon-button" aria-label="关闭导出结果" data-icon="close"></button></div>
+      <p id="export-results-summary" class="export-results-summary"></p>
+      <ul id="export-results-list"></ul>
+    </dialog>
+    <dialog id="compare-dialog" class="compare-dialog" aria-labelledby="compare-dialog-title">
+      <div class="dialog-head">
+        <h2 id="compare-dialog-title">图片对照</h2>
+        <button id="close-compare" type="button" class="icon-button" aria-label="关闭图片对照" title="关闭（Esc）" data-icon="close"></button>
+      </div>
+      <div id="compare-content"></div>
+    </dialog>
+    <div id="local-drop-target" class="local-drop-target" hidden><span data-icon="tray" aria-hidden="true"></span><span id="local-drop-label"></span></div>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

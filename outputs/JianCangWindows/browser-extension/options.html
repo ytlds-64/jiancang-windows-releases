@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>见藏采集设置</title>
+  <link rel="stylesheet" href="options.css">
+  <script src="options.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><img src="icon.png" width="40" height="40" alt=""><h1>见藏 · 浏览器采集</h1></header>
+    <p>在见藏的「浏览器采集」中可更改默认接收位置。首次采集时，在见藏中同意连接。</p>
+    <div class="actions">
+      <button id="connect" type="button">连接见藏</button>
+      <button id="forget" type="button" hidden>移除此浏览器的连接</button>
+    </div>
+    <p id="status" role="status"></p>
+    <section aria-labelledby="auto-drag-title">
+      <h2 id="auto-drag-title">直接拖图采集</h2>
+      <p>拖图采集默认开启。在浏览器已授权的网页上拖动图片，松手即可存到见藏默认位置或指定集合。</p>
+      <div class="actions">
+        <button id="auto-drag" type="button">启用拖图采集</button>
+      </div>
+      <p id="auto-drag-status" role="status"></p>
+    </section>
+    <section aria-labelledby="capture-help">
+      <h2 id="capture-help">其他采集方式</h2>
+      <p>点击工具栏的见藏图标可打开采集面板，选择「批量采集图片」可勾选当前帖子或网页中已加载的图片。右键菜单可快速采集单张图片。</p>
+      <p id="last" hidden></p>
+    </section>
+    <section>
+      <label class="preference"><input id="capture-sound" type="checkbox" checked disabled>保存成功时播放提示音</label>
+      <p id="capture-sound-status" role="status" hidden></p>
+    </section>
+  </main>
+</body>
+</html>

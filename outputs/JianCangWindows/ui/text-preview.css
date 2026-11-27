@@ -1,0 +1,48 @@
+.text-preview {
+  align-self: stretch;
+  justify-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.text-preview-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.text-preview-metadata { color: var(--muted); font-size: 11px; }
+.text-preview-toolbar .outline-button { min-height: 26px; padding: 3px 6px; font-size: 11px; white-space: nowrap; }
+.text-preview-toolbar svg { width: 13px; height: 13px; }
+.text-preview-content {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink);
+  background: var(--canvas);
+  font: 12px / 1.55 Consolas, 'Cascadia Mono', monospace;
+  tab-size: 4;
+}
+.text-preview-content:focus-visible { outline-offset: -2px; }
+.text-preview-content::placeholder { color: var(--muted); }
+.viewer-media .text-preview {
+  justify-self: center;
+  width: min(calc(100% - 24px), 920px);
+  margin-block: 12px;
+}
+.viewer-media .text-preview-content { padding: 16px; font-size: 14px; }

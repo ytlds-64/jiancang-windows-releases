@@ -1,0 +1,68 @@
+.pdf-preview {
+  align-self: stretch;
+  justify-self: stretch;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pdf-preview-paper {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pdf-preview-paper canvas {
+  display: block;
+  background: white;
+  box-shadow: 0 0 0 1px #0002, 0 3px 16px #0003;
+}
+
+.pdf-preview-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.viewer-media .pdf-preview-status { color: var(--media-muted); }
+
+.pdf-preview-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 10px 6px;
+  background: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-preview-navigation .icon-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.pdf-preview-navigation .icon-button svg { width: 15px; height: 15px; }
+
+.pdf-preview-page {
+  width: 56px;
+  min-width: 0;
+  height: 26px;
+  padding: 1px 4px;
+  color: var(--ink);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  text-align: center;
+  font: inherit;
+  font-size: 13px;
+  appearance: textfield;
+}
+
+.pdf-preview-page::-webkit-inner-spin-button,
+.pdf-preview-page::-webkit-outer-spin-button { appearance: none; }
+
+.pdf-preview-total { color: var(--muted); font-size: 13px; }
+.viewer-media .pdf-preview-navigation { justify-self: center; border-radius: var(--radius); margin: 4px 0 10px; }

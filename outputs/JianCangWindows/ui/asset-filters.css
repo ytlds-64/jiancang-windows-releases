@@ -1,0 +1,151 @@
+.asset-filters, .asset-filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.asset-filter-trigger, .asset-filter-chip, .asset-filter-secondary, .asset-filter-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--paper);
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.asset-filter-trigger { flex: none; border-color: transparent; background: transparent; }
+.asset-filter-trigger svg { width: 15px; height: 15px; }
+.asset-filter-trigger:hover, .asset-filter-secondary:not(:disabled):hover, .asset-filter-close:hover {
+  background: var(--hover);
+}
+
+.asset-filter-trigger[aria-expanded="true"], .asset-filter-trigger[data-active="true"] {
+  color: var(--active-ink);
+  background: var(--accent-tint);
+}
+
+.asset-filter-count {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--glyph-bed);
+  font-variant-numeric: tabular-nums;
+}
+
+.asset-filter-chips {
+  max-width: clamp(100px, 26vw, 320px);
+  padding: 2px 1px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.asset-filter-chip { min-height: 25px; flex: none; border-color: transparent; background: var(--glyph-bed); }
+.asset-filter-chip:hover { color: var(--active-ink); background: var(--accent-tint); }
+.asset-filter-chip:focus-visible { outline-offset: -2px; }
+.asset-filter-chip span:first-child { max-width: 23ch; overflow: hidden; text-overflow: ellipsis; }
+.asset-filter-chip span:last-child { color: var(--muted); font-size: 15px; line-height: 1; }
+
+.asset-filter-panel {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px #17120c40;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.asset-filter-panel:popover-open { display: grid; gap: 13px; }
+.asset-filter-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 5px;
+  align-items: center;
+}
+.asset-filter-header h2 { margin: 0; font-size: 14px; font-weight: 670; }
+.asset-filter-secondary, .asset-filter-close { border-color: transparent; color: var(--muted); }
+.asset-filter-close { min-width: 28px; font-size: 17px; line-height: 1; }
+
+.asset-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.asset-filter-property-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 7px; }
+.asset-filter-field { display: grid; gap: 5px; min-width: 0; }
+.asset-filter-field > span, .asset-filter-panel legend {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.asset-filter-panel select, .asset-filter-panel input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--canvas);
+  font-size: 12px;
+}
+.asset-filter-dates, .asset-filter-tags { min-width: 0; margin: 0; padding: 0; border: 0; }
+.asset-filter-date-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.asset-filter-date-error, .asset-filter-tag-status {
+  display: block;
+  margin: 5px 0 0;
+  color: var(--warning-ink);
+  font-size: 12px;
+}
+.asset-filter-tag-status { color: var(--muted); }
+.asset-filter-tag-search { margin-top: 5px; }
+.asset-filter-tag-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  max-height: 150px;
+  margin-top: 5px;
+  padding: 1px 1px 1px 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.asset-filter-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 25px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.asset-filter-tag:hover { background: var(--hover); }
+.asset-filter-tag:has(input:checked) { color: var(--active-ink); background: var(--accent-tint); }
+.asset-filter-tag input { margin: 0 3px; accent-color: var(--accent); }
+.asset-filter-tag span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 370px) {
+  .asset-filter-tag-list { grid-template-columns: minmax(0, 1fr); }
+}

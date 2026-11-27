@@ -1,0 +1,67 @@
+.desktop-audio-player {
+  width: min(calc(100% - 24px), 550px);
+  height: max-content;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  border: 1px solid var(--media-line);
+  border-radius: 13px;
+  background: var(--media-rail);
+  box-shadow: 0 12px 32px #0003;
+  grid-template-rows: auto auto;
+}
+
+.desktop-audio-player .desktop-video-picture { display: block; }
+.desktop-audio-player audio { display: none; }
+.desktop-audio-player .desktop-video-loading { inset: 8px 8px auto auto; }
+.desktop-audio-identity {
+  display: grid;
+  align-items: center;
+  grid-template: auto auto / auto minmax(0, 1fr);
+  gap: 3px 14px;
+  padding: clamp(12px, 4cqw, 23px);
+}
+.desktop-audio-mark {
+  grid-row: 1 / span 2;
+  align-self: center;
+  display: grid;
+  width: clamp(40px, 12cqw, 64px);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--active-ink);
+  background: var(--accent-tint);
+}
+.desktop-audio-mark svg { width: 23px; height: 23px; }
+.desktop-audio-title {
+  align-self: end;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: clamp(15px, 4cqw, 20px);
+  font-weight: 660;
+}
+.desktop-audio-format {
+  align-self: start;
+  color: var(--video-dim);
+  font-size: 12px;
+  font-weight: 570;
+}
+
+.desktop-audio-player .desktop-video-controls {
+  display: grid;
+  grid-template-columns: auto auto minmax(32px, 66px) minmax(0, 1fr) auto auto;
+  grid-template-areas: 'times times seek seek seek seek' 'play mute volume . rate repeat';
+  gap: 5px 8px;
+  padding: 9px clamp(8px, 3cqw, 15px) 10px;
+}
+.desktop-audio-player .desktop-video-times { grid-area: times; }
+.desktop-audio-player .desktop-video-seek { grid-area: seek; }
+.desktop-audio-player .desktop-video-play { grid-area: play; }
+.desktop-audio-player .desktop-video-mute { grid-area: mute; }
+.desktop-audio-player .desktop-video-volume { grid-area: volume; display: block; width: 100%; }
+.desktop-audio-player .desktop-video-rate { grid-area: rate; }
+.desktop-audio-player .desktop-video-repeat { grid-area: repeat; }
+
+.preview-stage:has(audio) { min-height: 57px; }

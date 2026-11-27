@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>见藏参考窗</title>
+  <link rel="stylesheet" href="reference.css">
+  <script src="reference.js" defer></script>
+</head>
+<body>
+  <main class="reference-canvas" tabindex="0" aria-label="参考图"
+    aria-description="拖动图片移动窗口，滚轮缩放，双击关闭。按 1 恢复原始大小，Ctrl 加滚轮调整不透明度，右键打开参考窗菜单。"
+    aria-keyshortcuts="Escape 0 1 F P R Control+C">
+    <img id="reference-image" alt="参考图" draggable="false" hidden>
+    <div class="reference-feedback">
+      <p id="reference-status" role="status">正在读取图片…</p>
+      <button id="reference-retry" type="button" hidden>重新读取</button>
+    </div>
+    <p id="reference-action-status" class="visually-hidden" role="status"></p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; font: 15px/1.55 system-ui, 'Microsoft YaHei', sans-serif; color: light-dark(#29241c, #eee7db); background: light-dark(#f7f5f1, #1b1a18); }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(100% - 40px, 590px); margin: clamp(24px, 8vh, 80px) auto; }
+header { display: flex; gap: 12px; align-items: center; }
+header img { border-radius: 9px; }
+h1 { margin: 0; font-size: 23px; }
+h2 { margin: 0 0 8px; font-size: 16px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.preference { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.preference input { margin: 0; accent-color: light-dark(#895a2f, #e9c98f); }
+button { min-height: 38px; border: 1px solid light-dark(#d7cabc, #584c3d); border-radius: 7px; padding: 6px 12px; font: inherit; cursor: pointer; color: light-dark(#201a12, #f4e4ce); background: light-dark(#e9c98f, #64482c); }
+button:disabled { cursor: wait; opacity: .65; }
+button#forget { color: inherit; background: transparent; }
+section { border-top: 1px solid light-dark(#d7cabc, #584c3d); margin-top: 16px; padding-top: 14px; }
+section p { margin-block: 6px; }
+#status, #last, #auto-drag-status { color: light-dark(#5a4e41, #c7b8a5); }

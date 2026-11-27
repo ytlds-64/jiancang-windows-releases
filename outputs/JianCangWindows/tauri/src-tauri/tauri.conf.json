@@ -1,0 +1,41 @@
+{
+  "productName": "见藏",
+  "mainBinaryName": "jiancang-tauri",
+  "version": "0.36.43",
+  "identifier": "com.jiancang.desktop.tauri",
+  "build": {
+    "frontendDist": "../generated/frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "见藏",
+        "decorations": false,
+        "width": 1360,
+        "height": 870,
+        "minWidth": 710,
+        "minHeight": 500,
+        "dragDropEnabled": true,
+        "useHttpsScheme": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: https://jiancangmedia.localhost jiancangmedia:; media-src 'self' blob: https://jiancangmedia.localhost jiancangmedia:; connect-src 'self' ipc: https://ipc.localhost http://ipc.localhost https://jiancangmedia.localhost jiancangmedia:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": { "../generated/backend/": "backend/" },
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  }
+}

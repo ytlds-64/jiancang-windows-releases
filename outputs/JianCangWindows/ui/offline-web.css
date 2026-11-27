@@ -1,0 +1,45 @@
+.offline-web-dialog { width: min(900px, 94vw); height: min(812px, 92dvh); max-height: 92dvh; overflow: hidden; }
+.offline-web-dialog[open] { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); }
+.offline-web-head h2 { margin: 0; }
+.offline-web-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--canvas); padding: 10px clamp(14px, 3.5vw, 26px);
+}
+.offline-web-identity { min-width: 0; display: grid; gap: 3px; }
+.offline-web-domain { font-weight: 650; overflow-wrap: anywhere; }
+.offline-web-stamp { font-size: 12px; color: var(--muted); }
+.offline-web-stamp:empty { display: none; }
+.offline-web-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; }
+.offline-web-actions button { min-width: 0; min-height: 32px; padding: 5px 10px; font-size: 13px; }
+.offline-web-message { margin: 0; padding: 8px clamp(14px, 3.5vw, 26px); color: var(--muted); background: var(--canvas); border-bottom: 1px solid var(--line); }
+.offline-web-message.offline-web-error { color: var(--warning-ink); }
+.offline-web-surface { grid-row: 4; overflow: auto; overscroll-behavior: contain; min-height: 0; }
+.offline-web-article { max-width: 760px; margin-inline: auto; padding: clamp(22px, 5vw, 43px) clamp(18px, 5vw, 49px) 30px; }
+.offline-web-article-title { margin: 0 0 13px; font-size: clamp(22px, 4vw, 34px); font-weight: 690; line-height: 1.3; overflow-wrap: anywhere; }
+.offline-web-byline, .offline-web-empty, .offline-web-truncated { margin: 0 0 18px; color: var(--muted); line-height: 1.7; }
+.offline-web-content { color: var(--ink); font-size: 15px; line-height: 1.85; overflow-wrap: anywhere; }
+.offline-web-content :is(p, li, blockquote) { white-space: pre-wrap; }
+.offline-web-content :is(p, ul, blockquote, pre) { margin: 0 0 13px; }
+.offline-web-content :is(h4, h5) { margin: 25px 0 9px; font-size: 1.18em; font-weight: 650; line-height: 1.4; }
+.offline-web-content h5 { font-size: 1.06em; }
+.offline-web-content blockquote { border-inline-start: 3px solid var(--line); color: var(--muted); padding: 2px 0 2px 13px; }
+.offline-web-content pre {
+  padding: 11px 13px; border: 1px solid var(--line); border-radius: 5px; background: var(--canvas);
+  font: 13px/1.6 "Cascadia Code", Consolas, monospace; white-space: pre-wrap;
+}
+.offline-web-links { margin-top: 27px; border-top: 1px solid var(--line); padding-top: 12px; }
+.offline-web-links summary { width: fit-content; cursor: pointer; font-weight: 640; }
+.offline-web-links ul { margin: 7px 0 0; padding: 0; list-style: none; }
+.offline-web-links li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 11px; padding: 3px 0; }
+.offline-web-link {
+  border: 0; padding: 3px 0; margin: 0; background: transparent; text-align: start;
+  overflow-wrap: anywhere; color: var(--active-ink); text-decoration: underline;
+}
+.offline-web-link-host { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.offline-web-footer { border-top: 1px solid var(--line); margin-top: 25px; padding-top: 9px; }
+.offline-web-footer button { padding-inline-start: 0; }
+.offline-web-remove-body p { margin: 0; color: var(--muted); line-height: 1.7; }
+@media (max-width: 640px) {
+  .offline-web-toolbar { align-items: flex-start; }
+  .offline-web-actions { gap: 5px; }
+}
