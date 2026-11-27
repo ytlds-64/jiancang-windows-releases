@@ -2019,15 +2019,21 @@ function navigationCount(id) {
   return id === 'stash' ? selectionStash.size : (totals.get(id) || 0);
 }
 
-function trashMenuTargets(scope) {
+function trashMenuTargets(scope, confirmed) {
   const groups = [];
   let skipped = 0;
   for (const { libraryId: id, library, revision: catalogRevision } of catalogEntries()) {
     if (scope !== null && scope !== id) continue;
-    const ids = library.assets.filter(asset => asset.trashed).map(asset => asset.id);
+    const entry = state.libraries.find(item => item.id === id);
+    const previous = confirmed?.get(id);
+    if (confirmed && (!previous || previous.root !== entry?.root || previous.libraryId !== entry?.libraryId)) continue;
+    const confirmedIds = previous ? new Set(previous.ids) : null;
+    const ids = library.assets.filter(asset => asset.trashed && (!confirmedIds || confirmedIds.has(asset.id)))
+      .map(asset => asset.id);
     if (!ids.length) continue;
     if (canOrganizeFromMenu(id) && !trashWriteInProgress(id)) {
-      groups.push({ id, ids, name: library.directoryName, kind: library.kind, catalogRevision, revision: library.revision });
+      groups.push({ id, ids, name: library.directoryName, kind: library.kind, catalogRevision,
+        revision: library.revision, trashRevision: library.trashRevision, root: entry.root, libraryId: entry.libraryId });
     } else {
       skipped += ids.length;
     }
@@ -2053,7 +2059,13 @@ async function showTrashMenu(event, invoker) {
   const targets = trashMenuTargets(scope);
   if (!targets.count) { showToast('回收站已更新，没有可操作的素材。'); return; }
   if (action === 'restore') await organizer.restoreAll(targets.groups, targets.skipped);
-  if (action === 'purge') organizer.emptyTrash(targets.groups, targets.skipped);
+  if (action === 'purge') {
+    organizer.emptyTrash(targets.groups, targets.skipped, async previous => {
+      const fresh = previous.length === 1 ? await requestState('refresh', previous[0].id) : await requestState('refreshAll');
+      if (!fresh) throw new Error('暂时无法重新读取回收站，请稍后重试。');
+      return trashMenuTargets(scope, new Map(previous.map(group => [group.id, group]))).groups;
+    });
+  }
 }
 
 function renderNavigation() {

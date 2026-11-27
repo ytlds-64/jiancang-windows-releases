@@ -33,7 +33,7 @@ async function openLibrary({ directory, kind }) {
   let library;
   if (format === 'local') library = await readLocalLibrary(root);
   else if (format === 'eagle') library = await readEagleLibrary(root);
-  else library = { ...await readLibrary(root), kind: 'jiancang', pathIndependentIdentity: true };
+  else library = { ...await readLibrary(root, { rootIdentity: identity }), kind: 'jiancang', pathIndependentIdentity: true };
   const end = await fs.lstat(root, { bigint: true });
   if (!end.isDirectory() || end.isSymbolicLink() || folderIdentity(end) !== identity) {
     throw new Error('素材库位置已变化，请重新读取。');

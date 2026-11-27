@@ -430,10 +430,16 @@ function dateISO(seconds) {
 function projectAssets(entities, collections, format) {
   const assets = [];
   const identities = new Map();
+  const trash = [];
   for (const [id, state] of entities.asset) {
     if (winner(state, 'life')?.value !== true) continue;
     const info = state.asset;
     const valueOf = (key, fallback) => winner(state, key)?.value ?? fallback;
+    const trashed = valueOf('deletedAt', null) !== null;
+    if (trashed && format === 6) {
+      const operations = field => state.registers.get(field).map(({ operation }) => operation.id).sort();
+      trash.push([id, operations('life'), operations('deletedAt')]);
+    }
     const tags = [], collectionIds = [];
     for (const field of state.registers.keys()) {
       if (!field.startsWith('tag:') && !field.startsWith('member:')) continue;
@@ -450,14 +456,21 @@ function projectAssets(entities, collections, format) {
       width: info.pixelWidth, height: info.pixelHeight, duration: info.duration ?? null,
       createdAt: dateISO(valueOf('createdAt', info.createdAt + appleEpoch)), importedAt: dateISO(info.importedAt + appleEpoch),
       tags: tags.sort(), collectionIds: collectionIds.sort(), favorite: valueOf('favorite', false), rating: valueOf('rating', 0),
-      note: valueOf('note', ''), sourceURL: valueOf('sourceURL', null), trashed: valueOf('deletedAt', null) !== null, available: false,
+      note: valueOf('note', ''), sourceURL: valueOf('sourceURL', null), trashed, available: false,
     });
     const births = format >= 2 ? state.births.filter(birth => dominates(birth.clock, state.deletions)) : [];
     for (const birth of births) identities.set(`${id}.${birth.id}`, { id, byteCount: info.blob.byteCount });
     identities.set(id, { id, byteCount: info.blob.byteCount });
   }
   assets.sort((left, right) => compare(right.importedAt ?? '', left.importedAt ?? '') || compare(left.id, right.id));
-  return { assets, identities };
+  return { assets, identities, trash };
+}
+
+function trashRevision(root, rootIdentity, libraryId, trash) {
+  const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root;
+  return createHash('sha256').update(JSON.stringify([
+    normalizedRoot, rootIdentity, libraryId, trash.toSorted(([a], [b]) => compare(a, b)),
+  ])).digest('hex');
 }
 
 function blobIdentity(filename, format) {
@@ -861,7 +874,7 @@ async function listSyncConflicts(selectedDirectory, expectedLibraryId, acknowled
   return { format: manifest.version, total, truncated: total > conflicts.length, conflicts, logIncomplete };
 }
 
-async function readLibrary(selectedDirectory) {
+async function readLibrary(selectedDirectory, { rootIdentity } = {}) {
   const root = await protocolRoot(selectedDirectory);
   const manifest = await readManifest(root);
 
@@ -875,7 +888,7 @@ async function readLibrary(selectedDirectory) {
     syncConflicts++;
     if (conflict.field === 'life') deletionConflictSignatures.push(conflictSignature(conflict));
   }
-  const { assets, identities } = projectAssets(entities, collections, manifest.version);
+  const { assets, identities, trash } = projectAssets(entities, collections, manifest.version);
   const { originals, originalCandidates, hydrationCandidates, unreadable } = await locateOriginals(root, manifest.version, identities);
   for (const asset of assets) asset.available = originals.has(asset.id);
   const missing = assets.filter(asset => asset.kind !== 'link' && !asset.available).length;
@@ -886,6 +899,7 @@ async function readLibrary(selectedDirectory) {
   if (unreadable && !missing) warnings.push('部分云盘原件路径暂不可读。');
   return {
     directoryName: path.basename(root), libraryId: manifest.libraryID, format: manifest.version,
+    ...(rootIdentity && manifest.version === 6 && { trashRevision: trashRevision(root, rootIdentity, manifest.libraryID, trash) }),
     syncConflicts, deletionConflictSignatures,
     assets, collections: [...collections.values()].sort((left, right) => compare(left.name, right.name) || compare(left.id, right.id)),
     originals, originalCandidates, hydrationCandidates, warnings, logIncomplete, partial: warnings.length > 0,
@@ -935,7 +949,7 @@ async function readWriteState(selectedDirectory, expectedLibraryId, deviceId, ac
   for (const conflict of fieldConflicts(entities)) {
     if (conflict.field !== 'life' || !acknowledged.has(conflictSignature(conflict))) conflicts++;
   }
-  const { assets } = projectAssets(entities, collections, manifest.version);
+  const { assets, trash } = projectAssets(entities, collections, manifest.version);
   const assetHistory = new Map();
   for (const [id, state] of entities.asset) {
     if (winner(state, 'life')?.value === false) {
@@ -943,6 +957,7 @@ async function readWriteState(selectedDirectory, expectedLibraryId, deviceId, ac
     }
   }
   return { root, rootIdentity, changesIdentity, clock, ownOperations, revision: revision.digest('hex'),
+    trashRevision: trashRevision(root, rootIdentity, manifest.libraryID, trash),
     remainingOperations: maxOperations - ready.length, remainingBytes: maxBytes - bytes,
     assets: new Map(assets.map(asset => [asset.id, asset])), collections, assetHistory, conflicts, entities,
     descriptors: new Map([...entities.asset].map(([id, state]) => [id, state.asset])) };

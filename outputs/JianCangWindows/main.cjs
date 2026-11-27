@@ -3208,11 +3208,11 @@ function handleLocalWorkflow() {
       if (entry.kind !== 'local' && (entry.kind !== 'jiancang' || command.action !== 'purgeTrash')) {
         throw new Error('此素材库不支持这项回收站操作。');
       }
-      const catalog = catalogs.get(id);
-      if (!catalog || catalog.cacheKey !== command.catalogRevision) {
-        throw new Error('回收站已更新，请重新确认要删除的素材。');
-      }
       if (entry.kind === 'local') {
+        const catalog = catalogs.get(id);
+        if (!catalog || catalog.cacheKey !== command.catalogRevision) {
+          throw new Error('回收站已更新，请重新确认要删除的素材。');
+        }
         const mediaRevisions = new Map();
         if (command.action === 'purgeTrash') {
           const all = command.all === true;

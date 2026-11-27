@@ -460,24 +460,22 @@ class LibraryService {
     const entry = this.writable(id);
     if (!purging && !localActions.has(command?.action)) throw new Error('此操作未在见藏中启用。');
     let mutation = command;
-    if (purging) {
+    if (purging && entry.kind === 'local') {
       const catalog = this.catalogs.get(id);
       if (!catalog || catalog.cacheKey !== command.catalogRevision) {
         throw new Error('回收站已更新，请重新确认要删除的素材。');
       }
-      if (entry.kind === 'local') {
-        const mediaRevisions = new Map();
-        if (command.action === 'purgeTrash') {
-          const all = command.all === true;
-          const ids = all ? [] : command.ids;
-          if (!Array.isArray(ids) || ids.length > 100_000) throw new Error('请选择要删除的素材。');
-          const records = all ? catalog.assets.values() : ids.map(assetId => catalog.assets.get(assetId));
-          for (const asset of records) {
-            if (asset?.trashed && asset.mediaRevision) mediaRevisions.set(asset.id, asset.mediaRevision);
-          }
+      const mediaRevisions = new Map();
+      if (command.action === 'purgeTrash') {
+        const all = command.all === true;
+        const ids = all ? [] : command.ids;
+        if (!Array.isArray(ids) || ids.length > 100_000) throw new Error('请选择要删除的素材。');
+        const records = all ? catalog.assets.values() : ids.map(assetId => catalog.assets.get(assetId));
+        for (const asset of records) {
+          if (asset?.trashed && asset.mediaRevision) mediaRevisions.set(asset.id, asset.mediaRevision);
         }
-        mutation = { ...command, mediaRevisions, purgeRootIdentity: catalog.identity };
       }
+      mutation = { ...command, mediaRevisions, purgeRootIdentity: catalog.identity };
     }
     if (['undo', 'redo'].includes(command.action)) {
       const { pending, running } = this.queue.summary(id);

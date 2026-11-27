@@ -623,8 +623,9 @@ test('controls format-6 two-way sync, captured originals, durable retry and conn
 
   const originalFile = service.original(checksum, id).file;
   const change = action => call('local:mutate', [id, { action, ids: [checksum] }]);
-  const purge = ({ catalogs }, ids = [checksum]) => call('local:mutate', [id, { action: 'purgeTrash', ids,
-    catalogRevision: catalogs.find(catalog => catalog.libraryId === id).revision }]);
+  const catalog = state => state.catalogs.find(item => item.libraryId === id);
+  const purge = (state, ids = [checksum]) => call('local:mutate', [id, { action: 'purgeTrash', ids,
+    trashRevision: catalog(state).library.trashRevision }]);
   const trashed = await change('trash');
   assert.equal(trashed.state.library.assets[0].trashed, true);
   assert.equal((await change('restore')).state.library.assets[0].trashed, false);
@@ -632,8 +633,28 @@ test('controls format-6 two-way sync, captured originals, durable retry and conn
   await assert.rejects(purge(service.state()), /重新确认/);
 
   const currentTrash = (await change('trash')).state;
+  await assert.rejects(purge(trashed.state), /重新确认/);
   await assert.rejects(purge(currentTrash, [checksum, 'a'.repeat(64)]), /重新确认/);
   assert.equal(service.state().library.assets[0].trashed, true);
+
+  // Hydrating or evicting an original changes the gallery snapshot, while this remains the same trash entry.
+  service.watcher.close();
+  const stagedOriginal = path.join(directory, 'staged.png');
+  await fs.rename(originalFile, stagedOriginal);
+  const refreshed = await call('library:refresh', [id]);
+  assert.equal(refreshed.library.assets[0].available, false);
+  assert.notEqual(catalog(refreshed).revision, catalog(currentTrash).revision);
+  assert.equal(catalog(refreshed).library.trashRevision, catalog(currentTrash).library.trashRevision);
+  await fs.rename(stagedOriginal, originalFile);
+
+  const savedRoot = path.join(directory, 'moved-sync');
+  const copiedRoot = path.join(directory, 'copied-sync');
+  await fs.rename(root, savedRoot);
+  await fs.cp(savedRoot, root, { recursive: true });
+  await assert.rejects(purge(currentTrash), /重新确认/);
+  await fs.rename(root, copiedRoot);
+  await fs.rename(savedRoot, root);
+
   const deleted = await purge(currentTrash);
   assert.equal(deleted.count, 1);
   assert.equal(deleted.pending, 0);
@@ -642,4 +663,5 @@ test('controls format-6 two-way sync, captured originals, durable retry and conn
   assert.deepEqual(deletion.changes, { life: { bool: { _0: false } } });
   assert.equal(deletion.entityID, checksum);
   assert.deepEqual(await fs.readFile(originalFile), image);
+  assert.deepEqual(await fs.readFile(path.join(copiedRoot, path.relative(root, originalFile))), image);
 });

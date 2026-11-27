@@ -187,6 +187,10 @@
       const status = {
         close: () => dialog.close(),
         label: value => { primary.textContent = value; },
+        summary: value => {
+          const description = heading.querySelector('.organize-summary');
+          description.title = description.textContent = value;
+        },
         clear: () => { error.hidden = true; },
         focus: element => { nextFocus = element; },
         focusSubmit: () => { nextFocus = primary; },
@@ -553,13 +557,15 @@
                     .map(item => `${group.name} · ${item.name}：${item.message}`).join('\n') });
                 }
               } catch (error) {
-                failures.push({ job, message: `${group.name}（${count} 项）操作失败。${error?.message || '请重试。'}` });
+                const message = error?.message || '请重试。';
+                failures.push({ job, message: `${group.name}（${count} 项）操作失败。${message}`,
+                  needsReconfirm: command.action === 'purgeTrash' && message === '回收站已更新，请重新确认要删除的素材。' });
               }
             }
           } finally { onBatchWrite(false); }
           if (failures.length) {
             const remaining = failures.map(item => item.job);
-            onIncomplete?.(remaining);
+            onIncomplete?.(remaining, failures.some(item => item.needsReconfirm));
             status?.focusSubmit();
             throw new Error([`${summary()} ${failures.length} 个库未完成。`, ...failures.map(item => item.message)].join('\n'));
           }
@@ -575,13 +581,19 @@
       catch (error) { notify(error.message); }
     }
 
-    function emptyTrash(groups, skipped) {
+    function emptyTrash(groups, skipped, refreshTargets) {
       const writer = acrossWriter(skipped);
-      let jobs = groups.map(group => ({ group, command: { action: 'purgeTrash', ids: group.ids,
-        catalogRevision: group.catalogRevision, revision: group.revision } }));
+      const confirmation = '确认清空回收站';
+      const purgeJobs = targets => targets.map(group => ({ group, command: {
+        action: 'purgeTrash', ids: group.ids,
+        ...(group.kind === 'jiancang' ? { trashRevision: group.trashRevision }
+          : { catalogRevision: group.catalogRevision, revision: group.revision }),
+      } }));
+      let jobs = purgeJobs(groups);
+      let needsReconfirm = false;
       open({
         title: '清空回收站？', subtitle: acrossSummary(groups),
-        submitText: '确认清空回收站', mode: 'across', danger: true,
+        submitText: confirmation, mode: 'across', danger: true,
         build(body) {
           body.append(element('p', 'organize-confirm-description', '所列素材将永久删除，包括被搜索或筛选隐藏的素材。此操作无法撤销。'));
           if (groups.some(group => group.kind === 'local')) {
@@ -590,12 +602,37 @@
           if (groups.some(group => group.kind === 'jiancang')) {
             body.append(element('p', 'organize-hint', '同步库会将删除同步到其他设备，云端文件由同步服务管理。'));
           }
-          showAcrossTargets(body, groups, skipped);
+          const targets = element('div');
+          showAcrossTargets(targets, groups, skipped);
+          body.append(targets);
+          return targets;
         },
-        async submit(_content, status) {
-          await writer.write(jobs, status, remaining => {
+        async submit(targets, status) {
+          if (needsReconfirm) {
+            const confirmedCount = jobs.reduce((total, job) => total + job.command.ids.length, 0);
+            const refreshed = await refreshTargets(jobs.map(job => ({ ...job.group, ids: job.command.ids })));
+            if (!refreshed.length) {
+              status.close();
+              notify(`${writer.summary()} 先前待删除的素材中已没有可操作的项目。`);
+              return;
+            }
+            jobs = purgeJobs(refreshed);
+            targets.replaceChildren(element('p', 'organize-hint', '已重新核对先前确认的素材。请再次确认下列项目。'));
+            showAcrossTargets(targets, refreshed, 0);
+            const remainingCount = jobs.reduce((total, job) => total + job.command.ids.length, 0);
+            if (remainingCount < confirmedCount) {
+              targets.append(element('p', 'organize-hint', `${confirmedCount - remainingCount} 项已离开回收站或暂不可操作。`));
+            }
+            status.summary(acrossSummary(refreshed));
+            status.label(confirmation);
+            status.focusSubmit();
+            needsReconfirm = false;
+            return;
+          }
+          await writer.write(jobs, status, (remaining, stale) => {
             jobs = remaining;
-            status.label(`重试 ${jobs.reduce((total, job) => total + job.command.ids.length, 0)} 项`);
+            needsReconfirm = stale;
+            status.label(stale ? '重新核对' : `重试 ${jobs.reduce((total, job) => total + job.command.ids.length, 0)} 项`);
           });
         },
       });
