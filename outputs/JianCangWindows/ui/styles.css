@@ -457,14 +457,19 @@ button.collection-toggle:hover { background: var(--hover); }
 .asset-card:focus-visible { outline-offset: 2px; }
 .asset-frame { position: relative; width: 100%; height: var(--picture-height, 110px); border-radius: 6px; }
 .asset-frame::after { content: ''; position: absolute; inset: 0; border: 2px solid transparent; border-radius: inherit; pointer-events: none; }
-.asset-card:not(.asset-list-row):hover:not([aria-pressed="true"]) .asset-frame::after { box-shadow: 0 0 0 1px color-mix(in srgb, var(--muted) 62%, transparent); }
+.asset-card:not(.asset-list-row, .asset-importing):hover:not([aria-pressed="true"]) .asset-frame::after { box-shadow: 0 0 0 1px color-mix(in srgb, var(--muted) 62%, transparent); }
 .asset-card[aria-pressed="true"] .asset-frame::after { border-color: var(--accent); }
 .asset-picture { position: relative; width: 100%; height: 100%; display: grid; place-items: center; border-radius: inherit; background: var(--image-bed); color: var(--muted); overflow: hidden; contain: paint; }
 .asset-picture[data-kind] { color: var(--glyph-ink); }
 .asset-picture > svg { width: 30px; height: 30px; }
 .asset-picture img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background-color: inherit; }
+.asset-picture img.audio-waveform { object-fit: fill; opacity: 0; }
+.asset-picture.audio-waveform-ready img.audio-waveform { opacity: 1; }
+.asset-picture.audio-waveform-ready > svg { display: none; }
+.asset-card.audio-preview-playing .asset-frame::after { border-bottom-color: var(--accent); }
 .asset-filetype, .asset-favorite { position: absolute; border-radius: 4px; color: #f5f0e7; background: #201d19d9; font-size: 10px; padding: 3px 6px; font-weight: 650; }
 .asset-filetype { inset: auto auto 7px 7px; }
+.asset-picture[data-kind="audio"] .asset-filetype { inset: 7px auto auto 7px; }
 .asset-favorite { inset: 7px 7px auto auto; color: #f1c483; }
 .asset-favorite svg { width: 12px; height: 12px; stroke-width: 2; }
 .asset-collection-grip {

@@ -3342,7 +3342,8 @@ function handleLocalWorkflow() {
   localAction('local-import:list', (id, includeTasks = true) => {
     writableLibrary(id);
     const queue = importQueue();
-    const details = includeTasks?.preview === true ? queue.previewSnapshot(id, includeTasks.collectionIds)
+    const details = includeTasks?.inline === true ? queue.inlineSnapshot(id, includeTasks.collectionIds, includeTasks.knownRevision)
+      : includeTasks?.preview === true ? queue.previewSnapshot(id, includeTasks.collectionIds)
       : includeTasks ? { tasks: queue.snapshot(id) } : {};
     return { ok: true, ...details, summary: queue.summary(id), paused: queue.isPaused(id) };
   });

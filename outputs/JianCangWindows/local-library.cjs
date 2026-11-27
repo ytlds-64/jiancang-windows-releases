@@ -247,7 +247,7 @@ async function snapshot(root, manifest) {
       const stat = originalIdentity ? await fs.lstat(file, { bigint: true }).catch(() => null) : null;
       const available = !!(stat?.isFile() && !stat.isSymbolicLink() && stat.size === BigInt(asset.byteCount));
       if (available) originals.set(asset.id, file);
-      else if (!asset.trashed) missing++;
+      else if (!asset.trashed && asset.kind !== 'link') missing++;
       const mediaRevision = available ? mediaStamp(stat) : null;
       assets[index] = { ...asset, available, mediaRevision };
     }

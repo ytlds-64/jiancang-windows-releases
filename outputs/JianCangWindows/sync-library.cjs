@@ -878,7 +878,7 @@ async function readLibrary(selectedDirectory) {
   const { assets, identities } = projectAssets(entities, collections, manifest.version);
   const { originals, originalCandidates, hydrationCandidates, unreadable } = await locateOriginals(root, manifest.version, identities);
   for (const asset of assets) asset.available = originals.has(asset.id);
-  const missing = assets.filter(asset => !asset.available).length;
+  const missing = assets.filter(asset => asset.kind !== 'link' && !asset.available).length;
   const warnings = [];
   const logIncomplete = pending > 0 || ready.length < operations.length;
   if (logIncomplete) warnings.push('部分整理记录尚未到齐，刷新后会继续读取。');

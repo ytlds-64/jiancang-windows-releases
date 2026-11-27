@@ -9,6 +9,7 @@
 .reading-actions { margin-left: auto; }
 .reading-rows { list-style: none; padding: 0; margin: 10px 0 0; }
 .reading-issue { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.reading-item-actions { display: flex; flex: none; flex-wrap: wrap; gap: 7px; }
 .reading-issue button { flex: none; }
 .reading-content { min-width: 0; overflow-wrap: anywhere; }
 .reading-content h4 { margin: 0 0 4px; font-size: 13px; }

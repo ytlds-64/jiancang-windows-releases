@@ -118,6 +118,7 @@ let restoreFocus = null;
 let busy = false;
 let toastTimer;
 let visibleAssets = [];
+let visibleImports = [];
 let previewableAssets = [];
 const previewIndices = new Map();
 let viewer = null;
@@ -163,6 +164,8 @@ const collectionFinder = window.createJianCangCollectionFinder({ dialog: byId('c
 const listHeader = byId('asset-list-header');
 const sortSelect = byId('sort-select');
 const continuous = window.createContinuousGallery({ gallery, scroller: scrollingGallery, listHeader, makeCard, cardKey, updateCard });
+const audioCardPreview = window.createJianCangAudioCardPreview({ gallery, scroller: scrollingGallery,
+  enabled: () => !viewer && !batchMode && !document.querySelector('dialog[open]') });
 const cancelMarquee = continuous.selectMarquee({
   getSelection: currentSelectionIds,
   onPreview(ids) {
@@ -205,6 +208,7 @@ const readingDiagnostics = window.createJianCangLibraryDiagnostics({ dialog: war
   reveal: id => bridge.revealLibrary(id),
   revealItem: (id, revision, index) => bridge.revealReadingItem(id, revision, index),
   retrieve: (id, ids) => cloudTools.open(id, ids ? { ids } : undefined),
+  locate: locateReadingAsset,
 });
 const visual = window.createJianCangVisualTools({ bridge, getAssets: visualScopeAssets,
   getAllAssets: () => browseCatalog?.assets || [], refFor: visualReference, notify: showToast,
@@ -307,7 +311,8 @@ const storageTools = window.createJianCangStorageManagement({ bridge, notify: sh
 const syncConflicts = window.createJianCangSyncConflicts({ bridge, notify: showToast });
 const intake = window.createJianCangLocalIntake({ bridge, getLibraries: writableLibraries, getCopyLibraries: copyDestinations, getCollections: localCollections,
   getTarget: localTarget, getDropTarget: currentLibraryTarget, getPreviewScope: importPreviewScope,
-  hasImportedAsset: hasImportPreviewResult, glyph, collectionDragType, onCreated(next, id) {
+  hasImportedAsset: hasImportPreviewResult, onPreviewChange: () => renderGalleryGrid({ importsOnly: true, preserveViewport: true }),
+  collectionDragType, onCreated(next, id) {
     if (librariesDialog.open) librariesDialog.close();
     state = next;
     void selectScope(id);
@@ -510,8 +515,9 @@ function importPreviewScope() {
 }
 
 function hasImportPreviewResult(task) {
-  if (!task.resultId) return false;
-  const asset = assetById.get(collectionKey(task.targetId, task.resultId));
+  const id = task.resultId ?? task.assetId;
+  if (!id) return false;
+  const asset = assetById.get(collectionKey(task.targetId, id));
   return !!asset && !asset.trashed && (!task.collectionId ||
     membershipIncludes(asset, collectionKey(task.targetId, task.collectionId)));
 }
@@ -1137,7 +1143,7 @@ function setState(next, { scopeChanged = false, navigationBookmark = null } = {}
       renderGallery({ animate: sameView, preserveViewport: sameView });
       continuous.restoreBookmark(restore);
       if (scopeChanged) motion(scrollingGallery, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1 }]);
-    } else intake.renderPreview();
+    } else renderGalleryGrid({ importsOnly: true, preserveViewport: true });
   } else {
     browseCatalog = null;
     workspaceRestorePending = true;
@@ -1145,7 +1151,7 @@ function setState(next, { scopeChanged = false, navigationBookmark = null } = {}
     closeViewer({ restore: false });
     endBatchSelection();
     void visual.refresh([]);
-    intake.renderPreview();
+    visibleImports = intake.previewItems();
   }
   lastCatalogKey = connected ? key : null;
   renderNavigationHistory();
@@ -1890,6 +1896,25 @@ function openFoundCollection(item) {
   byId('collection-tree').querySelector('.is-current')?.scrollIntoView({ block: 'nearest' });
 }
 
+function locateReadingAsset(libraryId, sourceId) {
+  const catalog = catalogEntries().find(entry => entry.libraryId === libraryId);
+  const asset = catalog?.library.assets.find(item => item.id === sourceId);
+  if (!asset) return { ok: false, message: '这个素材暂不可定位，请重新读取素材库。' };
+  warningsDialog.close();
+  recordNavigation();
+  if (scopeId !== libraryId) void selectScope(libraryId, { record: false });
+  assetSearch.close();
+  assetSearch.restore('');
+  assetFilters.reset({ notify: false });
+  visual.restore({}, false);
+  selectView(asset.trashed ? 'trash' : 'all', null, { record: false });
+  const id = collectionKey(libraryId, sourceId);
+  const card = continuous.focus(id);
+  if (!card) return { ok: false, message: '这个素材暂不可定位，请重新读取素材库。' };
+  selectAsset(id, card);
+  return { ok: true };
+}
+
 const collectionColors = [
   ['46786B', '默认颜色', 'var(--muted)'], ['E45949', '红色'], ['E89834', '橙色'], ['E5C445', '黄色'],
   ['56A66E', '绿色'], ['46ACBC', '青色'], ['5087CD', '蓝色'], ['976ECC', '紫色'], ['DC80AE', '粉色'],
@@ -2206,12 +2231,18 @@ function loadThumbnail(image, asset, canUseOriginal, handlers) {
 function mountCardThumbnail(picture, asset, button) {
   picture.querySelector('img')?.remove();
   const thumbnail = node('img');
+  const waveform = asset.kind === 'audio' && Boolean(window.jiancangTauriPlatform);
+  if (waveform) {
+    picture.classList.remove('audio-waveform-ready');
+    thumbnail.classList.add('audio-waveform');
+  }
   thumbnail.alt = '';
   thumbnail.loading = 'lazy';
   thumbnail.decoding = 'sync';
   thumbnail.draggable = false;
   loadThumbnail(thumbnail, asset, asset.available && (asset.kind === 'image' || asset.extension === 'livp'), {
     loaded: () => {
+      if (waveform) picture.classList.add('audio-waveform-ready');
       if (!button.isConnected || mediaRatio(asset.width, asset.height)) return;
       const ratio = mediaRatio(thumbnail.naturalWidth, thumbnail.naturalHeight);
       if (ratio) continuous.setRatio(asset.id, ratio);
@@ -2222,6 +2253,7 @@ function mountCardThumbnail(picture, asset, button) {
 }
 
 function cardKey(asset, isList) {
+  if (asset.importing) return JSON.stringify([asset.name, asset.sourceName, asset.extension]);
   return JSON.stringify([asset.name, asset.sourceName, assetPreviewRevision(asset), asset.trashed, writableAsset(asset),
     isList ? [asset.importedAt, asset.rating] : scopeId === null && catalogEntries().length > 1]);
 }
@@ -2238,6 +2270,29 @@ function updateCard(button, asset) {
 }
 
 function makeCard(asset, isList) {
+  if (asset.importing) {
+    const card = node('span', isList ? 'asset-card asset-list-row asset-importing' : 'asset-card asset-importing');
+    const picture = node('span', 'asset-picture');
+    const frame = node('span', 'asset-frame');
+    picture.dataset.kind = asset.kind;
+    picture.append(glyph(kindIcon(asset.kind)));
+    if (!isList && (asset.kind !== 'image' || asset.extension === 'livp')) {
+      picture.append(node('span', 'asset-filetype', asset.extension === 'livp' ? 'LIVE' :
+        (asset.extension || labels[asset.kind] || '文件').toUpperCase()));
+    }
+    frame.append(picture);
+    if (isList) appendAssetListCells(card, frame, asset);
+    else {
+      const caption = node('span', 'asset-caption');
+      caption.append(node('span', 'asset-name', asset.name));
+      if (scopeId === null && catalogEntries().length > 1) caption.append(node('span', 'asset-info', asset.sourceName));
+      card.append(frame, caption);
+    }
+    card.setAttribute('role', 'img');
+    card.setAttribute('aria-label', `${asset.name}，导入中`);
+    card.title = asset.name;
+    return card;
+  }
   const button = makeButton('', null, isList ? 'asset-card asset-list-row' : 'asset-card', event => {
     const current = assetById.get(asset.id);
     if (current) chooseCard(current, button, event);
@@ -2256,6 +2311,9 @@ function makeCard(asset, isList) {
   picture.dataset.kind = kind;
   picture.append(glyph(kindIcon(kind)));
   if (kind === 'image' || asset.thumbnailAvailable) mountCardThumbnail(picture, asset, button);
+  if (kind === 'audio' && asset.available && window.jiancangTauriPlatform) {
+    audioCardPreview.attach(button, assetURL('original', asset, { playback: true }));
+  }
   if (!isList && (isLivePhoto || kind !== 'image' || !asset.available)) {
     picture.append(node('span', 'asset-filetype', isLivePhoto ? 'LIVE' : (asset.extension || labels[kind] || '文件').toUpperCase()));
   }
@@ -2270,7 +2328,9 @@ function makeCard(asset, isList) {
   else {
     const caption = node('span', 'asset-caption');
     const title = asset.name || '未命名素材';
-    const detail = asset.available ? (asset.width > 0 && asset.height > 0 ? `${asset.width} × ${asset.height}` : formatBytes(asset.byteCount)) : '原件尚未到齐';
+    const duration = kind === 'audio' ? formatDuration(asset.duration) : '';
+    const detail = asset.available ? duration || (asset.width > 0 && asset.height > 0
+      ? `${asset.width} × ${asset.height}` : formatBytes(asset.byteCount)) : '原件尚未到齐';
     const captionDetail = scopeId === null && catalogEntries().length > 1
       ? [asset.sourceName, detail].filter(Boolean).join(' · ') : detail;
     caption.append(node('span', 'asset-name', title), node('span', 'asset-info', captionDetail));
@@ -2307,7 +2367,7 @@ function appendAssetListCells(button, frame, asset) {
   const added = Number.isFinite(date) ? listDateFormat.format(date) : '';
   const rating = asset.rating > 0 ? `${asset.rating} 星` : '';
   const source = asset.sourceName || '';
-  const status = !asset.available ? '原件尚未到齐' : '';
+  const status = !asset.available && !asset.importing ? '原件尚未到齐' : '';
   const name = node('span', 'asset-list-name');
   const description = node('span', 'asset-list-description');
   const detail = node('span', 'asset-list-detail');
@@ -2406,13 +2466,29 @@ function renderGallery({ animate = true, preserveViewport = false } = {}) {
     } else closeViewer({ restore: false });
   }
   if (selectedId && !visibleAssets.some(asset => asset.id === selectedId)) selectedId = null;
-  continuous.render(visibleAssets, { layout: preferences.layout, tileSize: preferences.tileSize,
-    captions: preferences.captions, selectedId, batchIds: batchMode ? batchIds : null, animate, preserveViewport });
+  renderGalleryGrid({ animate, preserveViewport });
   updateAssetListControls();
   updateBatchActions();
   const inStash = section === 'stash';
   byId('clear-selection-stash').hidden = !inStash || !selectionStash.size;
   byId('save-smart-collection').disabled = inStash;
+  renderInspector();
+  if (viewer) {
+    if (preserveViewport) viewer.scrollTop = scrollingGallery.scrollTop;
+    updateViewer();
+  }
+}
+
+function renderGalleryGrid({ animate = false, preserveViewport = false, importsOnly = false } = {}) {
+  if (!browseCatalog) return;
+  const importing = intake.previewItems();
+  if (importsOnly && importing.length === visibleImports.length &&
+      importing.every((asset, index) => asset === visibleImports[index])) return;
+  visibleImports = importing;
+  const presented = importing.length ? [...importing, ...visibleAssets] : visibleAssets;
+  continuous.render(presented, { layout: preferences.layout, tileSize: preferences.tileSize,
+    captions: preferences.captions, selectedId, batchIds: batchMode ? batchIds : null, animate, preserveViewport });
+  const inStash = section === 'stash';
   const unavailable = inStash ? [...selectionStash].filter(id => {
     const asset = assetById.get(id);
     return !asset || asset.trashed || trashWrites.has(id);
@@ -2420,14 +2496,8 @@ function renderGallery({ animate = true, preserveViewport = false } = {}) {
   const unavailableText = unavailable ? ` · ${counts.format(unavailable)} 项暂不可用` : '';
   const retentionText = section === 'trash' && state.libraries.some(entry =>
     entry.kind === 'local' && (scopeId === null || scopeId === entry.id)) ? ' · 本地库保留 30 天' : '';
-  byId('gallery-count').textContent = `${counts.format(visibleAssets.length)} 份${unavailableText}${retentionText}`;
-  intake.renderPreview();
-  renderEmptyResults(visibleAssets.length === 0);
-  renderInspector();
-  if (viewer) {
-    if (preserveViewport) viewer.scrollTop = scrollingGallery.scrollTop;
-    updateViewer();
-  }
+  byId('gallery-count').textContent = `${counts.format(presented.length)} 份${unavailableText}${retentionText}`;
+  renderEmptyResults(presented.length === 0);
 }
 
 function renderEmptyResults(empty) {
@@ -3321,6 +3391,7 @@ function animateViewerEntry(asset, from) {
 
 function openViewer(asset, card) {
   if (!canPreview(asset) || viewer || batchMode) return;
+  audioCardPreview.stop();
   rememberWorkspace();
   assetFilters.close();
   cancelViewerMotion();

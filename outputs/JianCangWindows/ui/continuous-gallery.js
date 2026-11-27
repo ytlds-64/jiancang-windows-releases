@@ -210,8 +210,10 @@
           card.asset = tile.asset;
         }
         const { element } = card;
-        const pressed = String(options.batchIds ? options.batchIds.has(id) : id === options.selectedId);
-        if (element.getAttribute('aria-pressed') !== pressed) element.setAttribute('aria-pressed', pressed);
+        if (!tile.asset.importing) {
+          const pressed = String(options.batchIds ? options.batchIds.has(id) : id === options.selectedId);
+          if (element.getAttribute('aria-pressed') !== pressed) element.setAttribute('aria-pressed', pressed);
+        }
         if (previousBoxes || card.tile !== tile) placeCard(element, tile);
         card.tile = tile;
         if (element !== insertionPoint) gallery.insertBefore(element, insertionPoint);
@@ -329,46 +331,57 @@
 
     function nearest(id, key) {
       const tile = layout.tiles.get(id);
-      if (!tile) return null;
+      if (!tile || tile.asset.importing) return null;
       if (layout.isList) {
-        if (key === 'Home') return assets[0]?.id ?? null;
-        if (key === 'End') return assets.at(-1)?.id ?? null;
+        const first = assets.findIndex(asset => !asset.importing);
+        if (key === 'Home') return assets[first]?.id ?? null;
+        if (key === 'End') return assets.findLast(asset => !asset.importing)?.id ?? null;
         const visible = viewport();
         const step = Math.max(1, Math.floor((visible.bottom - visible.top) / listRowHeight) - 1);
         const offsets = { ArrowUp: -1, ArrowDown: 1, PageUp: -step, PageDown: step };
-        return Object.hasOwn(offsets, key) ? assets[bound(tile.index + offsets[key], 0, assets.length - 1)]?.id ?? null : null;
+        return Object.hasOwn(offsets, key) ? assets[bound(tile.index + offsets[key], first, assets.length - 1)]?.id ?? null : null;
       }
       // Left and right follow the visible sort order, even when a row ends
       // or the next masonry card is placed in a different column.
       if (key === 'ArrowLeft' || key === 'ArrowRight') {
         const offset = key === 'ArrowLeft' ? -1 : 1;
-        return assets[tile.index + offset]?.id ?? null;
+        for (let index = tile.index + offset; assets[index]; index += offset) {
+          if (!assets[index].importing) return assets[index].id;
+        }
+        return null;
       }
       if (key !== 'ArrowUp' && key !== 'ArrowDown') return null;
 
       const offset = key === 'ArrowUp' ? -1 : 1;
       if (tile.column !== undefined) {
-        return layout.lanes[tile.column][tile.columnOffset + offset]?.asset.id ?? null;
+        const lane = layout.lanes[tile.column];
+        for (let index = tile.columnOffset + offset; lane[index]; index += offset) {
+          if (!lane[index].asset.importing) return lane[index].asset.id;
+        }
+        return null;
       }
 
-      const row = layout.rows[tile.row + offset];
-      if (!row) return null;
       const centerX = tile.x + tile.width / 2;
-      let best = Infinity;
-      let chosen = null;
-      for (const candidate of row) {
-        const distance = Math.max(0, candidate.x - centerX, centerX - candidate.x - candidate.width);
-        if (distance < best) {
-          best = distance;
-          chosen = candidate.asset.id;
+      for (let index = tile.row + offset; layout.rows[index]; index += offset) {
+        let best = Infinity;
+        let chosen = null;
+        for (const candidate of layout.rows[index]) {
+          if (candidate.asset.importing) continue;
+          const distance = Math.max(0, candidate.x - centerX, centerX - candidate.x - candidate.width);
+          if (distance < best) {
+            best = distance;
+            chosen = candidate.asset.id;
+          }
         }
+        if (chosen) return chosen;
       }
-      return chosen;
+      return null;
     }
 
     function setBatchSelection(ids) {
       options.batchIds = ids;
       for (const [id, card] of cards) {
+        if (card.asset.importing) continue;
         const pressed = String(ids ? ids.has(id) : id === options.selectedId);
         if (card.element.getAttribute('aria-pressed') !== pressed) card.element.setAttribute('aria-pressed', pressed);
       }
@@ -445,7 +458,7 @@
           rectangle.style.width = `${right - left}px`;
           rectangle.style.height = `${Math.max(0, Math.min(bottom + origin.top, box.bottom) - visibleTop)}px`;
           const hits = inRange(layout.lanes, top, bottom)
-            .filter(tile => tile.x < right && tile.x + tile.width > left && tile.y < bottom && tile.bottom > top)
+            .filter(tile => !tile.asset.importing && tile.x < right && tile.x + tile.width > left && tile.y < bottom && tile.bottom > top)
             .sort((a, b) => a.index - b.index);
           const hitIds = new Set(gesture.initial);
           for (const tile of hits) hitIds.add(tile.asset.id);
@@ -553,7 +566,7 @@
       },
       focus(id, { scroll = true, focus = true } = {}) {
         const tile = layout.tiles.get(id);
-        if (!tile) return null;
+        if (!tile || tile.asset.importing) return null;
         if (scroll) {
           const current = viewport();
           if (tile.y < current.top || tile.bottom - tile.y > scroller.clientHeight) {

@@ -952,7 +952,8 @@ class LibraryService {
       case 'local-import:copy-eagle': return this.serial(() => this.copyFromLibraries(...args.slice(0, 4), true));
       case 'local-import:list': {
         const { id } = this.importEntry(args[0]);
-        const details = args[1]?.preview === true ? this.queue.previewSnapshot(id, args[1].collectionIds)
+        const details = args[1]?.inline === true ? this.queue.inlineSnapshot(id, args[1].collectionIds, args[1].knownRevision)
+          : args[1]?.preview === true ? this.queue.previewSnapshot(id, args[1].collectionIds)
           : args[1] !== false ? { tasks: this.queue.snapshot(id) } : {};
         const refresh = this.importRefreshes.get(id);
         return { ok: true, ...details,

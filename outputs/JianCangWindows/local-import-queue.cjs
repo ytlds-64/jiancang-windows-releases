@@ -2,7 +2,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { randomBytes, randomUUID } = require('node:crypto');
+const { createHash, randomBytes, randomUUID } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { imageExtension, imageFilename, publicImageURL, imageURLCandidates } = require('./dropped-image.cjs');
 const { webURL } = require('./local-workflow.cjs');
@@ -19,7 +19,9 @@ const MAX_UNFINISHED = 20_000;
 const MAX_HISTORY = 2_000;
 const VISIBLE_HISTORY = 100;
 const PREVIEW_LIMIT = 24;
+const INLINE_CHANGE_LIMIT = 256;
 const taskColumns = 'id, asset_id, batch_id, target_id, collection_id, name, status, error, result_id';
+const inlineColumns = 'id, asset_id, target_id, collection_id, name, status, result_id';
 const MIB = 1024 ** 2;
 const MAX_SOURCE_BYTES = 96 * MIB;
 const MAX_STAGED = 256 * MIB;
@@ -172,6 +174,8 @@ class LocalImportQueue {
   #changes = new Set();
   #timer = null;
   #input = Promise.resolve();
+  #inlineEpoch = randomUUID();
+  #inlineChanges = new Map();
 
   constructor({ directory, perform, onChange, onError } = {}) {
     if (!absolutePath(directory) || typeof perform !== 'function') throw new TypeError('Import queue configuration is invalid');
@@ -305,6 +309,55 @@ class LocalImportQueue {
       ORDER BY updated DESC, position DESC LIMIT ?
     `).all(...bindings, VISIBLE_HISTORY);
     return { tasks: [...current, ...complete].map(row => this.#public(row)), previewCount: current[0]?.preview_count ?? 0 };
+  }
+
+  inlineSnapshot(targetId, collectionIds, knownRevision) {
+    if (!this.#db || !validID(targetId)) return { tasks: [] };
+    if (collectionIds !== undefined && (!Array.isArray(collectionIds) || collectionIds.length > MAX_BATCH ||
+        collectionIds.some(id => typeof id !== 'string' || !id || id.length > 256 || CONTROL.test(id)))) {
+      throw new Error('请选择有效的目标集合。');
+    }
+    const changes = this.#inlineChanges.get(targetId);
+    const revision = changes?.revision ?? 0;
+    const scopeKey = collectionIds === undefined ? 'all' : createHash('sha256').update(JSON.stringify(collectionIds)).digest('hex');
+    const prefix = `${this.#inlineEpoch}:${targetId}:${scopeKey}:`;
+    const inlineRevision = prefix + revision;
+    if (knownRevision === inlineRevision) return { inlineRevision };
+    const cursor = typeof knownRevision === 'string' && knownRevision.startsWith(prefix)
+      ? Number(knownRevision.slice(prefix.length)) : -1;
+    const incremental = Number.isSafeInteger(cursor) && cursor >= (changes?.floor ?? 0) && cursor < revision;
+    const changed = incremental ? [...new Set(changes.events.filter(event => event.revision > cursor).map(event => event.id))] : [];
+    const scope = collectionIds === undefined ? '' : 'AND collection_id IN (SELECT value FROM json_each(?))';
+    const bindings = collectionIds === undefined ? [targetId] : [targetId, JSON.stringify(collectionIds)];
+    if (incremental) bindings.push(JSON.stringify(changed));
+    const rows = this.#db.prepare(`
+      SELECT ${inlineColumns} FROM tasks
+      WHERE target_id = ? AND (status IN ('pending', 'running') OR status = 'done' AND result_id IS NOT NULL)
+      ${scope} ${incremental ? 'AND id IN (SELECT value FROM json_each(?))' : ''}
+      ORDER BY position
+    `).all(...bindings);
+    const tasks = rows.map(row => ({
+      id: row.id, assetId: row.asset_id, targetId: row.target_id, collectionId: row.collection_id, name: row.name,
+      ...(row.status === 'done' && { resultId: row.result_id }),
+    }));
+    const returned = incremental && new Set(tasks.map(task => task.id));
+    return { inlineRevision, tasks, ...(incremental && { removed: changed.filter(id => !returned.has(id)) }) };
+  }
+
+  #recordInlineChange(targetId, id) {
+    let changes = this.#inlineChanges.get(targetId);
+    if (!changes) {
+      changes = { revision: 0, floor: 0, events: [] };
+      this.#inlineChanges.set(targetId, changes);
+    }
+    const revision = ++changes.revision;
+    if (!id) {
+      changes.floor = revision;
+      changes.events.length = 0;
+    } else {
+      changes.events.push({ id, revision });
+      if (changes.events.length > INLINE_CHANGE_LIMIT) changes.floor = changes.events.shift().revision;
+    }
   }
 
   summary(targetId) {
@@ -448,6 +501,7 @@ class LocalImportQueue {
       await Promise.allSettled(staged.map(file => fs.unlink(file)));
       throw error;
     }
+    this.#recordInlineChange(targetId);
     this.#notify(targetId);
     this.#kick();
     return { queued: rows.length, tasks: rows.map(row => this.#public(row)) };
@@ -464,6 +518,7 @@ class LocalImportQueue {
       RETURNING id, asset_id, batch_id, target_id, collection_id, name, status, error
     `).get(Date.now(), taskId, targetId);
     if (!row) throw new Error('未找到可重试的导入任务。');
+    this.#recordInlineChange(targetId, row.id);
     this.#notify(targetId);
     this.#kick();
     return this.#public(row);
@@ -484,6 +539,7 @@ class LocalImportQueue {
       WHERE tasks.id = next_attempts.id
     `).run(targetId, Date.now());
     if (changes) {
+      this.#recordInlineChange(targetId);
       this.#notify(targetId);
       this.#kick();
     }
@@ -530,6 +586,7 @@ class LocalImportQueue {
       throw error;
     }
     if (!rows.length) return 0;
+    this.#recordInlineChange(targetId, rows.length === 1 ? rows[0].id : undefined);
     this.#notify(targetId);
     for (const row of rows) {
       if (row.staged_bytes && validID(row.id, TASK_ID)) await fs.unlink(this.#stageFile(row.id, row.source_kind)).catch(() => {});
@@ -634,6 +691,7 @@ class LocalImportQueue {
         prune.run(MAX_HISTORY);
       }
       this.#progress.delete(row.id);
+      this.#recordInlineChange(row.target_id, row.id);
       this.#notify(row.target_id);
       if (!failure && stagedFile) await fs.unlink(stagedFile).catch(() => {});
       // Give native input and IPC an opportunity to run for large URL batches.

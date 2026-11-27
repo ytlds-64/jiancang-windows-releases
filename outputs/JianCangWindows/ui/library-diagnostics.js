@@ -37,22 +37,25 @@
     if (!library || !library.partial && !library.warnings?.length) return { total: 0, entries: [] };
     if (library.readingIssues) return library.readingIssues;
     const entries = [];
-    let missing = 0;
+    const sync = entry.kind === 'jiancang';
     for (const asset of library.assets) {
-      if (asset.trashed || asset.kind === 'link' || asset.available) continue;
-      missing++;
-      if (entries.length >= 120) continue;
-      entries.push({ assetId: asset.id, reason: entry.kind === 'jiancang' ? 'sync-original' : 'local-original', name: asset.name });
+      if ((!sync && asset.trashed) || asset.kind === 'link' || asset.available !== false) continue;
+      entries.push({ assetId: asset.id, reason: sync ? 'sync-original' : 'local-original',
+        name: asset.name, trashed: !!asset.trashed });
     }
-    const warnings = (library.warnings ?? []).filter(text => !missing || !/^有 \d+ 份(?:本地)?原件暂不可用/.test(text));
+    const warnings = (library.warnings ?? []).filter(text => !/^有 \d+ 份(?:本地)?原件暂不可用。/.test(text));
     entries.push(...warnings.map(name => ({ reason: 'library-warning', name })));
-    return { total: missing + warnings.length, entries };
+    return { total: entries.length, entries };
   }
 
-  window.createJianCangLibraryDiagnostics = ({ dialog, refresh, reveal, revealItem, relocate, retrieve, notify }) => {
+  window.createJianCangLibraryDiagnostics = ({ dialog, refresh, reveal, revealItem, relocate, retrieve, locate, notify }) => {
     const list = dialog.querySelector('#warnings-list');
     const summary = dialog.querySelector('#warnings-summary');
+    const pageSize = 120;
+    const reports = new WeakMap();
+    const rowLimits = new Map();
     let groups = [];
+    let renderedGroups = null;
 
     function action(label, run) {
       const button = node('button', 'outline-button', label);
@@ -81,25 +84,37 @@
       }
       header.append(title, badge, actions);
       const rows = node('ul', 'reading-rows');
-      for (const [index, item] of report.entries.entries()) {
+      const shown = report.entries.slice(0, rowLimits.get(entry.id) ?? pageSize);
+      for (const [index, item] of shown.entries()) {
         const row = node('li', 'reading-issue');
         const content = node('div', 'reading-content');
         const [reason, guidance] = details[item.reason] ?? details['library-warning'];
         const name = item.name || item.itemId || reason || '读取提示';
         content.append(node('h4', '', name));
+        if (item.trashed) content.append(node('span', 'reading-count', '回收站'));
         const location = [item.itemId && item.itemId !== name ? `ID ${item.itemId}` : '', item.path].filter(Boolean).join(' · ');
         if (location) content.append(node('code', 'reading-path', location));
         if (reason && reason !== name) content.append(node('p', 'reading-reason', reason));
-        if (guidance) content.append(node('p', 'reading-guidance', guidance));
+        const hint = item.trashed ? '可定位到回收站中的素材记录。' : guidance;
+        if (hint) content.append(node('p', 'reading-guidance', hint));
         row.append(content);
+        const itemActions = node('div', 'reading-item-actions');
+        if (item.assetId) itemActions.append(action('定位素材', () => locate(entry.id, item.assetId)));
         if (item.directory && revision) {
-          row.append(action('打开所在文件夹', () => revealItem(entry.id, revision, index)));
-        } else if (item.reason === 'sync-original') {
-          row.append(action('取回原件', () => { dialog.close(); retrieve(entry.id, [item.assetId]); }));
+          itemActions.append(action('打开所在文件夹', () => revealItem(entry.id, revision, index)));
+        } else if (item.reason === 'sync-original' && !item.trashed) {
+          itemActions.append(action('取回原件', () => { dialog.close(); retrieve(entry.id, [item.assetId]); }));
         }
+        if (itemActions.childElementCount) row.append(itemActions);
         rows.append(row);
       }
       group.append(header, rows);
+      if (shown.length < report.entries.length) group.append(action('显示更多', () => {
+        rowLimits.set(entry.id, shown.length + pageSize);
+        const expanded = renderGroup({ entry, revision, report });
+        group.replaceWith(expanded);
+        expanded.querySelectorAll('.reading-issue')[shown.length]?.querySelector('button')?.focus();
+      }));
       if (report.total > report.entries.length) {
         group.append(node('p', 'reading-guidance', `已列出 ${report.entries.length} 项。处理后刷新即可继续查看剩余项目。`));
       }
@@ -108,9 +123,12 @@
 
     function render() {
       const count = groups.reduce((sum, group) => sum + group.report.total, 0);
-      const key = JSON.stringify(groups.map(({ entry, revision, report }) => [entry.id, entry.status, revision, report]));
-      if (list.dataset.report === key) return;
-      list.dataset.report = key;
+      if (renderedGroups?.length === groups.length && groups.every(({ entry, revision, report }, index) => {
+        const previous = renderedGroups[index];
+        return entry.id === previous.entry.id && entry.status === previous.entry.status &&
+          entry.name === previous.entry.name && revision === previous.revision && report === previous.report;
+      })) return;
+      renderedGroups = groups;
       summary.textContent = count ? `共 ${count} 项。可在对应条目下查看原因和处理方式。` : '当前范围的素材库已读取完成。';
       list.replaceChildren(...groups.map(renderGroup));
     }
@@ -120,8 +138,15 @@
         const catalogs = new Map(loaded.map(info => [info.libraryId, info]));
         groups = shown.map(entry => {
           const catalog = catalogs.get(entry.id);
-          return { entry, revision: catalog?.revision, report: collect(catalog?.library, entry) };
+          const library = catalog?.library;
+          let report = entry.status !== 'unavailable' && library ? reports.get(library) : null;
+          if (!report) {
+            report = collect(library, entry);
+            if (entry.status !== 'unavailable' && library) reports.set(library, report);
+          }
+          return { entry, revision: catalog?.revision, report };
         }).filter(group => group.report.total > 0);
+        for (const id of rowLimits.keys()) if (!groups.some(group => group.entry.id === id)) rowLimits.delete(id);
         if (dialog.open) render();
         return groups.reduce((sum, group) => sum + group.report.total, 0);
       },

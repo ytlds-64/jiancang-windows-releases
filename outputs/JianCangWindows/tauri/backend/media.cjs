@@ -11,23 +11,33 @@ const { folderIdentity } = require('../../library-watcher.cjs');
 const { readLivePhotoPart } = require('../../live-photo.cjs');
 const { isTextPreview, readTextPreview } = require('../../text-preview.cjs');
 const { createThumbnailCache } = require('../../thumbnail-cache.cjs');
+const { toolInputProtocol } = require('../../video-trim.cjs');
 
 const images = new Map(Object.entries({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
   webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon' }));
 const movies = new Map(Object.entries({ mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime',
   webm: 'video/webm', ogv: 'video/ogg' }));
 const audio = new Map(Object.entries({ mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac',
-  wav: 'audio/wav', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg' }));
+  wav: 'audio/wav', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg',
+  wma: 'audio/x-ms-wma', aif: 'audio/aiff', aiff: 'audio/aiff', ape: 'audio/ape' }));
 const heifExtensions = new Set(['heic', 'heif']);
 const heifBrands = new Set(['heic', 'heix', 'heim', 'heis', 'mif1']);
-const supportedThumbnailInputs = new Set([...images.keys(), ...movies.keys(), ...heifExtensions, 'mkv', 'avi', 'mts', 'm2ts', 'ts']);
+const supportedThumbnailInputs = new Set([...images.keys(), ...movies.keys(), ...heifExtensions,
+  'mkv', 'avi', 'mts', 'm2ts', 'ts', 'wmv', 'flv', 'mpeg', 'mpg', '3gp']);
 const roles = new Set(['thumbnail', 'original', 'video', 'live-motion', 'board-image', 'palette-image', 'edit-image', 'pdf-original', 'text-preview']);
 const imageRoles = new Set(['thumbnail', 'original', 'board-image', 'palette-image']);
 const imageThumbnailLimit = 64 * 1024 ** 2;
-const videoThumbnailLimit = 512 * 1024 ** 2;
+const videoThumbnailLimit = 32 * 1024 ** 3;
+const legacyVideoStagingLimit = 512 * 1024 ** 2;
 const thumbnailBytes = 2 * 1024 ** 2;
 const heifDemuxers = 'mov,mp4,m4a,3gp,3g2,mj2';
 const thumbnailDemuxers = `image2,${heifDemuxers},matroska,webm,ogg,avi,mpegts,jpeg_pipe,png_pipe,webp_pipe,bmp_pipe,gif,mjpeg`;
+const waveformDemuxers = `aac,${heifDemuxers},mp3,wav,flac,ogg,aiff,asf,ape`;
+const waveformByteLimit = 256 * 1024 ** 2;
+const waveformDurationLimit = 2 * 60 * 60;
+const waveformType = 'image/png';
+const waveformSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]);
+const videoThumbnailDemuxers = `${heifDemuxers},matroska,webm,ogg,avi,mpegts,mpeg,mpegvideo,m4v,asf,flv`;
 const toolInputLimits = ['-max_alloc', '134217728', '-probesize', '16000000', '-max_streams', '64', '-threads', '1'];
 
 function fileDirectory(library) {
@@ -71,16 +81,34 @@ async function findFfmpeg() {
 }
 
 function canGenerateThumbnail(asset, ffmpeg) {
+  if (asset.kind === 'audio') {
+    return Boolean(ffmpeg && asset.available && audio.has(asset.extension) &&
+      asset.byteCount > 0 && asset.byteCount <= waveformByteLimit &&
+      !(asset.duration > waveformDurationLimit));
+  }
   // Serve ICO directly so the browser can select an embedded size and preserve transparency.
   return Boolean(ffmpeg && asset.available && asset.extension !== 'ico' &&
     ['image', 'video'].includes(asset.kind) && supportedThumbnailInputs.has(asset.extension) &&
     asset.byteCount > 0 && asset.byteCount <= (asset.kind === 'video' ? videoThumbnailLimit : imageThumbnailLimit));
 }
 
-function boundedToolOutput(tool, args, signal, limit) {
+async function audioWaveform(ffmpeg, file, signal) {
+  // Limit decoded audio before the waveform filter accumulates samples.
+  const bytes = await boundedToolOutput(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin',
+    '-protocol_whitelist', 'file', '-format_whitelist', waveformDemuxers, ...toolInputLimits,
+    '-t', String(waveformDurationLimit), '-i', file, '-filter_complex_threads', '1',
+    '-filter_complex', '[0:a:0]aformat=channel_layouts=mono,aresample=2000,showwavespic=s=640x320:colors=0x7d8086:scale=sqrt,format=rgba[wave]',
+    '-map', '[wave]', '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', '-threads', '1', 'pipe:1'], signal, thumbnailBytes);
+  if (!bytes.subarray(0, waveformSignature.length).equals(waveformSignature)) {
+    throw new Error('无法生成音频波形。');
+  }
+  return bytes;
+}
+
+function boundedToolOutput(tool, args, signal, limit, stdin = 'ignore') {
   return new Promise((resolve, reject) => {
     const child = spawn(tool, args, {
-      stdio: ['ignore', 'pipe', 'ignore'], signal, windowsHide: true,
+      stdio: [stdin, 'pipe', 'ignore'], signal, windowsHide: true,
     });
     let count = 0;
     const chunks = [];
@@ -131,6 +159,58 @@ async function thumbnailFrame(ffmpeg, file, signal, edge, heif) {
     throw new Error('预览格式无效。');
   }
   return bytes;
+}
+
+async function sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack, stdin = 'ignore') {
+  const seek = seconds > 0 ? ['-ss', seconds.toFixed(3)] : [];
+  const scale = 'scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2';
+  const filter = skipBlack
+    ? `${scale},format=yuv420p,blackframe=amount=0:threshold=24,metadata=mode=select:key=lavfi.blackframe.pblack:function=less:value=98`
+    : scale;
+  const bytes = await boundedToolOutput(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin',
+    '-protocol_whitelist', stdin === 'ignore' ? 'file' : 'fd', '-format_whitelist', videoThumbnailDemuxers,
+    ...toolInputLimits, '-filter_threads', '1', ...seek, '-t', '2', '-i', input, '-map', '0:V:0', '-an', '-vf', filter,
+    '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-threads', '1', 'pipe:1'], signal, thumbnailBytes, stdin);
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error('视频封面格式无效。');
+  return bytes;
+}
+
+async function videoPoster(ffmpeg, original, shutdown) {
+  const { library, asset, file, candidates } = original;
+  const signal = AbortSignal.any([shutdown, AbortSignal.timeout(18_000)]);
+  const knownDuration = Number.isFinite(asset.duration) && asset.duration > 0;
+  const first = knownDuration ? Math.min(8, asset.duration * .12) : 2;
+  const second = knownDuration ? Math.min(24, asset.duration * .35) : 8;
+  async function chooseFrame(sample) {
+    const candidates = second > first + .75 ? [first, second] : [first];
+    for (const seconds of candidates) {
+      try { return await sample(seconds, true); }
+      catch { signal.throwIfAborted(); }
+    }
+    return sample(0, false);
+  }
+  if (await toolInputProtocol(ffmpeg) === 'fd') {
+    return chooseFrame(async (seconds, skipBlack) => {
+      // Like video metadata and playback, resolve only a contained, validated
+      // original. The inherited handle also avoids staging large videos.
+      const { handle } = await openAsset(original, signal);
+      try {
+        const before = await handle.stat({ bigint: true });
+        const bytes = await sampleVideoFrame(ffmpeg, 'fd:', signal, seconds, skipBlack, handle.fd);
+        const after = await handle.stat({ bigint: true });
+        if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
+          throw new Error('原件已变化，请重新读取。');
+        }
+        return bytes;
+      } finally { await handle.close(); }
+    });
+  }
+  // Keep old FFmpeg versions working within their original staging limit.
+  if (asset.byteCount > legacyVideoStagingLimit) return null;
+  const decode = input => chooseFrame((seconds, skipBlack) => sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack));
+  const folder = fileDirectory(library);
+  return folder ? withReadOnlyThumbnailFile(folder, file, asset.byteCount, signal, decode)
+    : withVerifiedThumbnailFile(library.root, candidates || [file], asset, signal, decode);
 }
 
 async function decodeHeifStill(bytes, signal, decode) {
@@ -186,7 +266,9 @@ function mediaHandler(service) {
     if (!file || !service.ffmpeg || (!still && !canGenerateThumbnail(asset, service.ffmpeg))) return null;
     await clearing?.catch(() => {});
     const heif = Boolean(still) || heifExtensions.has(asset.extension);
-    const rendition = heif ? `tauri-heif-jpeg-${edge}-v1` : 'tauri-jpeg-640-v1';
+    const waveform = asset.kind === 'audio';
+    const rendition = waveform ? 'tauri-audio-waveform-640-v1' : heif ? `tauri-heif-jpeg-${edge}-v1`
+      : asset.kind === 'video' ? 'tauri-video-jpeg-640-v2' : 'tauri-jpeg-640-v1';
     const key = JSON.stringify([rendition, library.registrationId, library.root, library.identity,
       library.publicLibrary.libraryId, asset.id, asset.mediaRevision ?? asset.id, asset.extension, asset.byteCount]);
     if (cache.has(key)) return cache.get(key);
@@ -200,15 +282,18 @@ function mediaHandler(service) {
       signal.throwIfAborted();
       await checkFolder(library);
       const stored = (await disk.get(key))?.bytes;
-      const decode = input => thumbnailFrame(service.ffmpeg, input, signal, edge, heif);
+      const decode = waveform ? input => audioWaveform(service.ffmpeg, input, signal)
+        : input => thumbnailFrame(service.ffmpeg, input, signal, edge, heif);
       const folder = fileDirectory(library);
-      const bytes = stored ?? (still ? await decodeHeifStill(still, signal, decode)
+      const bytes = stored ?? (asset.kind === 'video' ? await videoPoster(service.ffmpeg, original, signal)
+        : still ? await decodeHeifStill(still, signal, decode)
         : folder ? await withReadOnlyThumbnailFile(folder, file, asset.byteCount, signal, decode)
         : await withVerifiedThumbnailFile(library.root, candidates || [file], asset, signal, decode));
+      if (!bytes) return null;
       if (started === generation) {
         if (cache.size >= 64) cache.delete(cache.keys().next().value);
         cache.set(key, bytes);
-        if (!stored) await disk.set(key, { bytes, type: 'image/jpeg' });
+        if (!stored) await disk.set(key, { bytes, type: waveform ? waveformType : 'image/jpeg' });
       }
       return bytes;
     }).catch(() => null).finally(() => {
@@ -231,6 +316,11 @@ function mediaHandler(service) {
       return;
     }
     if (role === 'thumbnail') {
+      if (asset.kind === 'audio') {
+        const waveform = await generateThumbnail(original);
+        signal.throwIfAborted();
+        if (waveform) { sendBytes(request, response, waveform, waveformType); return; }
+      }
       const sourceType = sourceThumbnail && images.get(sourceThumbnail.extension);
       if (sourceType) {
         await checkFolder(library);
@@ -241,7 +331,7 @@ function mediaHandler(service) {
           return;
         }
       }
-      if (!heifExtensions.has(asset.extension)) {
+      if (asset.kind !== 'audio' && !heifExtensions.has(asset.extension)) {
         const generated = await generateThumbnail(original);
         signal.throwIfAborted();
         if (generated) { sendBytes(request, response, generated, 'image/jpeg'); return; }

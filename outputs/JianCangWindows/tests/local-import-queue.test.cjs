@@ -287,6 +287,55 @@ test('upgrades queued imports with bounded collection previews and retains commi
   } finally { await reopened.close(); }
 });
 
+test('inline imports include the whole collection and report only changes through progress and completion', async t => {
+  const root = await workspace(t);
+  let release;
+  let reporting;
+  const hold = new Promise(resolve => { release = resolve; });
+  const resultId = '1'.repeat(64);
+  const queue = new LocalImportQueue({
+    directory: path.join(root, 'queue'),
+    async perform(task, reportProgress) {
+      if (task.name === 'holding') {
+        reporting = reportProgress;
+        await hold;
+      }
+      if (task.name === 'fail') throw new Error('Fixture failure');
+      return { id: resultId };
+    },
+  });
+  await queue.initialize();
+  try {
+    const source = { kind: 'url', url: 'https://example.com/' };
+    const { tasks } = await queue.enqueue({ targetId: firstLibrary, collectionId: 'clips',
+      sources: ['holding', 'cancel', 'fail', ...Array.from({ length: 30 }, (_, i) => `clip-${i}`)]
+        .map(name => ({ ...source, name })) });
+    await queue.enqueue({ targetId: firstLibrary, collectionId: 'other', sources: [source] });
+    const clips = queue.inlineSnapshot(firstLibrary, ['clips']);
+    assert.deepEqual(clips.tasks.map(task => task.id), tasks.map(task => task.id));
+    assert.equal(queue.inlineSnapshot(firstLibrary, ['other'], clips.inlineRevision).tasks.length, 1);
+    assert.deepEqual(queue.inlineSnapshot(firstLibrary, ['clips'], clips.inlineRevision), { inlineRevision: clips.inlineRevision });
+    await queue.cancel(firstLibrary, tasks[1].id);
+    const cancelled = queue.inlineSnapshot(firstLibrary, ['clips'], clips.inlineRevision);
+    assert.deepEqual(cancelled.removed, [tasks[1].id]);
+    assert.deepEqual(cancelled.tasks, []);
+    queue.start();
+    await until(() => reporting);
+    reporting(0.75);
+    assert.deepEqual(queue.inlineSnapshot(firstLibrary, ['clips'], cancelled.inlineRevision), { inlineRevision: cancelled.inlineRevision });
+    release();
+    await until(() => queue.summary(firstLibrary).done === 32);
+    const finished = queue.inlineSnapshot(firstLibrary, ['clips'], cancelled.inlineRevision);
+    assert.equal(finished.tasks.length, 31);
+    assert.deepEqual(finished.removed, [tasks[2].id, queue.snapshot(firstLibrary).find(task => task.collectionId === 'other').id]);
+    assert.ok(finished.tasks.every(task => task.resultId === resultId));
+    assert.equal(queue.summary(firstLibrary).failed, 1);
+  } finally {
+    release();
+    await queue.close();
+  }
+});
+
 test('a paused library finishes the running job, leaves other libraries moving, and waits after restart', async t => {
   const root = await workspace(t);
   const directory = path.join(root, 'queue');

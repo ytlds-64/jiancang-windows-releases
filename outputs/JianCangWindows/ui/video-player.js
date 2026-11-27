@@ -1063,6 +1063,66 @@
       seekBy: delta => seekTo((pendingSeek ?? media.currentTime) + delta), dispose };
   }
 
+  window.createJianCangAudioCardPreview = ({ gallery, scroller, enabled }) => {
+    let current;
+    const removals = new MutationObserver(() => {
+      if (current && !gallery.contains(current.card)) stop();
+    });
+
+    function stop(card) {
+      if (!current || (card && current.card !== card)) return;
+      const request = current;
+      current = null;
+      removals.disconnect();
+      clearTimeout(request.timer);
+      request.card.classList.remove('audio-preview-playing');
+      if (request.media) {
+        request.media.pause();
+        request.media.removeAttribute('src');
+        request.media.load();
+      }
+    }
+
+    function attach(card, url) {
+      card.addEventListener('pointerenter', event => {
+        if (event.pointerType !== 'mouse' || event.buttons || !enabled()) return;
+        stop();
+        const request = { card };
+        current = request;
+        removals.observe(gallery, { childList: true });
+        request.timer = setTimeout(() => {
+          if (current !== request) return;
+          if (document.hidden || !gallery.contains(card) || !card.matches(':hover') || !enabled()) {
+            stop(card);
+            return;
+          }
+          const media = new Audio();
+          request.media = media;
+          media.volume = preferredVolume.volume;
+          media.muted = preferredVolume.muted;
+          const finish = () => {
+            if (current === request) stop(card);
+          };
+          media.addEventListener('playing', () => {
+            if (current === request) card.classList.add('audio-preview-playing');
+          }, { once: true });
+          media.addEventListener('ended', finish, { once: true });
+          media.addEventListener('error', finish, { once: true });
+          media.src = url;
+          void media.play().catch(finish);
+        }, 140);
+      });
+      for (const event of ['pointerleave', 'pointercancel', 'pointerdown', 'dragstart']) {
+        card.addEventListener(event, () => stop(card));
+      }
+    }
+
+    scroller.addEventListener('scroll', () => stop(), { passive: true });
+    window.addEventListener('blur', () => stop());
+    window.addEventListener('pagehide', () => stop());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+    return { attach, stop };
+  };
   window.createJianCangVideoPlayer = createMediaPlayer;
   window.createJianCangAudioPlayer = (media, options) => createMediaPlayer(media, { ...options, autoplay: false });
   window.readJianCangVideoNotes = resourceKey => {

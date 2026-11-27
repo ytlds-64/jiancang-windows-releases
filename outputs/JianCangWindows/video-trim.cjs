@@ -25,7 +25,7 @@ const resolutions = {
   preview: [960, 540],
 };
 const encoderSupport = new Map();
-const probeProtocols = new Map();
+const inputProtocols = new Map();
 
 function displayError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -205,19 +205,23 @@ async function inspectVideo(ffprobe, input, signal, header) {
     audioIndex: audio?.index, hasAudio: !!audio };
 }
 
+function toolInputProtocol(tool) {
+  if (!inputProtocols.has(tool)) {
+    if (inputProtocols.size >= 8) inputProtocols.delete(inputProtocols.keys().next().value);
+    const pending = runTool(tool, ['-hide_banner', '-protocols'], { timeout: 3500 })
+      .then(output => /^\s+fd\s*$/mu.test(output) ? 'fd' : 'pipe')
+      .catch(error => { if (inputProtocols.get(tool) === pending) inputProtocols.delete(tool); throw error; });
+    inputProtocols.set(tool, pending);
+  }
+  return inputProtocols.get(tool);
+}
+
 async function inspectVideoMetadata({ ffprobe, openSource, signal } = {}) {
   if (typeof ffprobe !== 'string' || !path.isAbsolute(ffprobe) || typeof openSource !== 'function') {
     throw displayError('无法找到视频处理组件。', 'VIDEO_TOOL_UNAVAILABLE');
   }
   signal?.throwIfAborted();
-  if (!probeProtocols.has(ffprobe)) {
-    if (probeProtocols.size >= 8) probeProtocols.delete(probeProtocols.keys().next().value);
-    const pending = runTool(ffprobe, ['-hide_banner', '-protocols'], { timeout: 3500 })
-      .then(output => /^\s+fd\s*$/mu.test(output) ? 'fd' : 'pipe')
-      .catch(error => { if (probeProtocols.get(ffprobe) === pending) probeProtocols.delete(ffprobe); throw error; });
-    probeProtocols.set(ffprobe, pending);
-  }
-  const protocol = await probeProtocols.get(ffprobe);
+  const protocol = await toolInputProtocol(ffprobe);
   signal?.throwIfAborted();
   // Pass the already-scoped handle as stdin. A seekable fd keeps FFprobe from
   // reopening any library path or reading through the whole video to reach its header.
@@ -481,4 +485,4 @@ async function prepareVideoTrim({ ffmpeg, ffprobe, openSource, extension, expect
   }
 }
 
-module.exports = { inspectVideoMetadata, maximumSegments, prepareVideoTrim, validateTrimRanges };
+module.exports = { inspectVideoMetadata, maximumSegments, prepareVideoTrim, toolInputProtocol, validateTrimRanges };

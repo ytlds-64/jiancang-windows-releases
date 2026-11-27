@@ -1,7 +1,7 @@
 'use strict';
 
 window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, getCollections, getTarget, getDropTarget,
-  getPreviewScope, hasImportedAsset, glyph, collectionDragType, onCreated, notify }) => {
+  getPreviewScope, hasImportedAsset, onPreviewChange, collectionDragType, onCreated, notify }) => {
   const get = id => document.getElementById(id);
   const createDialog = get('local-create-dialog');
   const importDialog = get('local-import-dialog');
@@ -15,13 +15,9 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
   const cancelPending = get('local-queue-cancel-pending');
   const queueStatus = get('local-queue-status');
   const queueSearch = get('local-queue-search');
-  const previewPanel = get('gallery-import-preview');
-  const previewCards = get('gallery-import-cards');
-  const previewSummary = get('gallery-import-summary');
   const buttons = ['local-import-files', 'local-import-folders', 'local-import-paste', 'local-copy-submit'];
   const states = { pending: '待导入', running: '正在导入', done: '已导入', failed: '失败' };
   const pageSize = 70;
-  const previewSize = 12;
   const normalize = text => text.normalize('NFKC').toLowerCase();
   let references = null;
   let pendingDrop = null;
@@ -39,8 +35,7 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
   let dropNotice = '';
   let previewScope;
   let nextPreparation = 0;
-  let previewTarget;
-  let previewRows = new Map();
+  let previewAssetsById = new Map();
   const preparations = new Set();
   const previews = new Map();
 
@@ -220,11 +215,10 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
       return;
     }
     const { summary, tasks, paused } = result;
-    const working = summary.running + summary.pending;
-    badge.textContent = String(working || summary.failed);
-    badge.hidden = !(working || summary.failed);
-    badge.classList.toggle('has-failures', !working && summary.failed > 0);
-    badge.title = paused ? '导入队列已暂停' : '';
+    badge.textContent = String(summary.failed);
+    badge.hidden = !summary.failed;
+    badge.classList.toggle('has-failures', summary.failed > 0);
+    badge.title = summary.failed ? '有素材导入失败' : '';
     if (!importDialog.open || target.value !== id) return;
     const syncTarget = getLibraries().find(library => library.id === id)?.kind === 'jiancang';
     queueState = { id, paused, summary, syncTarget,
@@ -283,100 +277,48 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
       (!previewScope.collections || previewScope.collections.has(task.collectionId));
   }
 
-  function previewRow(name) {
-    const element = document.createElement('li');
-    element.className = 'gallery-import-card';
-    const frame = document.createElement('div');
-    frame.className = 'asset-frame';
-    const picture = document.createElement('div');
-    picture.className = 'asset-picture';
-    picture.setAttribute('aria-hidden', 'true');
+  function importPlaceholder(task, sourceName) {
+    const id = `import:${task.targetId}:${task.id}`;
+    const name = task.name || '未命名文件';
     const extension = /\.([a-z0-9]{1,10})$/i.exec(name)?.[1].toLowerCase();
     const kind = videoSuffix.test(name) ? 'video'
       : /^(?:jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|ico|livp)$/.test(extension) ? 'image'
-        : /^(?:mp3|m4a|wav|aac|flac|ogg|opus|aiff?)$/.test(extension) ? 'audio' : 'document';
-    picture.dataset.kind = kind;
-    picture.append(glyph(kind));
-    if (extension) {
-      const type = document.createElement('span');
-      type.className = 'asset-filetype';
-      type.textContent = extension.toUpperCase();
-      picture.append(type);
-    }
-    frame.append(picture);
-    const title = document.createElement('strong');
-    title.className = 'asset-name';
-    title.textContent = name;
-    title.title = name;
-    const detail = document.createElement('span');
-    detail.className = 'asset-info';
-    const progress = document.createElement('progress');
-    progress.max = 1;
-    progress.setAttribute('aria-label', `导入 ${name}`);
-    element.append(frame, title, detail, progress);
-    return { element, detail, progress };
+        : /^(?:mp3|m4a|wav|aac|flac|ogg|opus|aiff?)$/.test(extension) ? 'audio'
+          : extension === 'pdf' ? 'pdf' : 'document';
+    return { id, name, sourceName, extension, kind, importing: true };
   }
 
-  function paintPreview() {
-    const visible = [];
-    let total = 0;
-    for (const preparation of preparations) {
-      if (!matchesPreview(preparation)) continue;
-      total += preparation.count;
-      visible.push(...preparation.tasks);
+  function previewItems() {
+    const selected = getPreviewScope();
+    const key = selected && JSON.stringify([selected.ids, selected.collectionIds]);
+    if (key !== previewScope?.key) {
+      previewScope = selected && { ...selected, key, collections: selected.collectionIds && new Set(selected.collectionIds) };
+      previews.clear();
+      for (const id of previewScope?.ids ?? []) requestPreview(id);
     }
-    for (const id of previewScope?.ids ?? []) {
-      const queue = previews.get(id);
-      if (!queue) continue;
-      const library = getLibraries().find(entry => entry.id === id);
-      let updating = 0;
-      for (const task of queue.tasks) {
-        if (!matchesPreview(task)) continue;
-        if (task.status === 'done') {
-          if (hasImportedAsset(task)) queue.observed.delete(task.id);
-          if (!task.resultId || !queue.observed.has(task.id)) continue;
-          updating++;
-        }
-        visible.push({ ...task, paused: queue.paused, syncPending: library?.writeStatus?.pending > 0 });
-      }
-      total += queue.count + updating;
-    }
-    const displayed = visible.slice(0, previewSize);
-    previewPanel.hidden = !displayed.length;
-    previewTarget = displayed[0]?.targetId;
-    const count = Math.max(total, visible.length);
-    const label = count > displayed.length ? `${count} 项导入任务 · 显示 ${displayed.length} 项` : `${count} 项导入任务`;
-    if (previewSummary.textContent !== label) previewSummary.textContent = label;
     const next = new Map();
-    const elements = displayed.map(task => {
-      const row = previewRows.get(task.id) ?? previewRow(task.name || '未命名文件');
-      next.set(task.id, row);
-      const progress = Math.min(0.99, Math.max(0, task.progress || 0));
-      let detail = states[task.status];
-      if (task.status === 'preparing') detail = '正在准备';
-      else if (task.status === 'failed') detail = '导入失败';
-      else if (task.status === 'done') detail = task.syncPending ? '等待写入同步库' : '正在更新图库';
-      else if (task.status === 'pending' && task.paused) detail = '等待恢复队列';
-      else if (task.status === 'running' && progress > 0) detail = `正在导入 ${Math.floor(progress * 100)}%`;
-      if (row.detail.textContent !== detail) row.detail.textContent = detail;
-      row.detail.title = task.error || detail;
-      row.element.dataset.status = task.status;
-      row.progress.hidden = task.status === 'failed';
-      if (task.status === 'preparing' || (task.status === 'running' && !progress) ||
-          (task.status === 'done' && task.syncPending)) row.progress.removeAttribute('value');
-      else row.progress.value = task.status === 'done' ? 1 : progress;
-      return row.element;
-    });
-    if (elements.length !== previewCards.children.length || elements.some((item, index) => item !== previewCards.children[index])) {
-      previewCards.replaceChildren(...elements);
+    const names = new Map(getLibraries().map(library => [library.id, library.name]));
+    function append(task) {
+      const id = `import:${task.targetId}:${task.id}`;
+      next.set(id, previewAssetsById.get(id) ?? importPlaceholder(task, names.get(task.targetId)));
     }
-    previewRows = next;
+    for (const preparation of preparations) {
+      if (matchesPreview(preparation)) preparation.tasks.forEach(append);
+    }
+    for (const queue of previews.values()) {
+      for (const task of queue.tasks.values()) {
+        if (hasImportedAsset(task)) queue.tasks.delete(task.id);
+        else append(task);
+      }
+    }
+    previewAssetsById = next;
+    return [...next.values()];
   }
 
   function previewQueue(id) {
     let queue = previews.get(id);
     if (!queue) {
-      queue = { tasks: [], observed: new Set(), count: 0, paused: false, requested: false, reading: false, receipts: 0 };
+      queue = { tasks: new Map(), requested: false, reading: false, receipts: 0, revision: undefined };
       previews.set(id, queue);
     }
     return queue;
@@ -392,16 +334,18 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
     const receipts = queue.receipts;
     void (async () => {
       try {
-        const result = await bridge.importTasks(id, { preview: true, collectionIds: scope.collectionIds ?? undefined });
+        const result = await bridge.importTasks(id, { inline: true, collectionIds: scope.collectionIds ?? undefined, knownRevision: queue.revision });
         if (previewScope !== scope || receipts !== queue.receipts || !result?.ok || !Array.isArray(result.tasks)) return;
-        const tasks = result.tasks.filter(matchesPreview);
-        queue.observed = new Set(tasks.filter(task =>
-          task.status === 'pending' || task.status === 'running' || task.status === 'done' && queue.observed.has(task.id)
-        ).map(task => task.id));
-        queue.tasks = tasks;
-        queue.count = result.previewCount ?? tasks.filter(task => task.status !== 'done').length;
-        queue.paused = result.paused;
-        paintPreview();
+        const previous = queue.tasks;
+        const next = Array.isArray(result.removed) ? previous : new Map();
+        for (const id of result.removed ?? []) next.delete(id);
+        for (const task of result.tasks) {
+          if (task.status === 'failed' || (task.resultId && !previous.has(task.id))) continue;
+          if (matchesPreview(task)) next.set(task.id, task);
+        }
+        queue.tasks = next;
+        queue.revision = result.inlineRevision;
+        onPreviewChange();
       } catch { /* The queue dialog can report an explicit request failure. */ }
       finally {
         queue.reading = false;
@@ -410,35 +354,17 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
     })();
   }
 
-  function renderPreview() {
-    const selected = getPreviewScope();
-    const key = selected && JSON.stringify([selected.ids, selected.collectionIds]);
-    if (key !== previewScope?.key) {
-      previewScope = selected && { ...selected, key, collections: selected.collectionIds && new Set(selected.collectionIds) };
-      previews.clear();
-      for (const id of previewScope?.ids ?? []) requestPreview(id);
-    }
-    paintPreview();
-  }
-
   function receivePreview(id, tasks) {
     if (!previewScope?.ids.includes(id) || !Array.isArray(tasks)) return;
     const queue = previewQueue(id);
-    const known = new Set(queue.tasks.map(task => task.id));
-    const received = tasks.filter(task => matchesPreview(task) && !known.has(task.id));
-    if (received.length) {
-      const preview = received.slice(0, previewSize);
-      for (const task of preview) queue.observed.add(task.id);
-      queue.tasks = [...preview, ...queue.tasks];
-      queue.count += received.length;
-      queue.receipts++;
+    for (const task of tasks) {
+      if (matchesPreview(task) && !queue.tasks.has(task.id)) queue.tasks.set(task.id, task);
     }
+    queue.receipts++;
     requestPreview(id);
   }
 
-  get('gallery-import-queue').addEventListener('click', () => void open({ libraryId: previewTarget }));
-
-  async function intake(operation, id, { direct = false, destinationName, collectionId = null, files = [] } = {}) {
+  async function intake(operation, id, { direct = false, collectionId = null, files = [] } = {}) {
     if (!direct) {
       if (importing) return;
       importing = true;
@@ -447,35 +373,30 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
     }
     const names = files.map(file => file?.name).filter(Boolean);
     const preparation = names.length ? {
-      targetId: id, collectionId, count: names.length, tasks: names.slice(0, previewSize).map(name => ({
-        id: `drop:${++nextPreparation}`, targetId: id, collectionId, name, status: 'preparing',
+      targetId: id, collectionId, tasks: names.map(name => ({
+        id: `drop:${++nextPreparation}`, targetId: id, collectionId, name,
       })),
     } : null;
     if (preparation) {
       preparations.add(preparation);
-      paintPreview();
+      onPreviewChange();
     }
-    const feedback = direct ? setTimeout(() => notify(destinationName
-      ? `正在准备导入到「${destinationName}」…` : '正在准备导入…'), 180) : undefined;
     try {
       const result = await operation();
       if (result?.cancelled) return;
       if (!result?.ok) throw new Error(result?.message || '无法加入导入队列。');
       preparations.delete(preparation);
       receivePreview(id, result.tasks);
-      paintPreview();
+      onPreviewChange();
       lastTarget = id;
-      const detail = result.skipped ? `，已跳过 ${result.skipped} 个不可用的项目` : '';
-      const start = destinationName ? `已向「${destinationName}」添加` : '已加入';
-      notify(`${start} ${result.queued} 项导入任务${detail}。`);
+      if (result.skipped) notify(`已跳过 ${result.skipped} 个不可用的项目。`);
       if (!direct && (references || pendingDrop) && importDialog.open) await open();
       void updateQueue();
     } catch (error) {
       if (!direct && importDialog.open) errorAt('local-import-error', error?.message);
       else notify(error?.message || '导入未完成。');
     } finally {
-      clearTimeout(feedback);
-      if (preparations.delete(preparation)) paintPreview();
+      if (preparations.delete(preparation)) onPreviewChange();
       if (!direct) {
         for (const button of buttons) get(button).disabled = false;
         importing = false;
@@ -487,9 +408,8 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
     const context = pickTarget();
     const library = getLibraries().find(entry => entry.id === context?.id);
     if (context && (getTarget()?.id === context.id || library?.kind === 'local')) {
-      const folder = context.collection && getCollections(context.id).find(entry => entry.id === context.collection);
       return intake(() => operation(context.id, context.collection), context.id, {
-        direct: true, destinationName: folder?.name || library?.name,
+        direct: true, collectionId: context.collection,
       }).finally(() => release?.());
     }
     return open({ drop: { operation, release } });
@@ -781,9 +701,9 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
       else if (event.dataTransfer.types.includes('Files')) notify('没有收到可导入的原件。请从资源管理器拖入已保存的文件。');
       return;
     }
-    const { id, collectionId, name } = destination;
+    const { id, collectionId } = destination;
     void intake(() => dropItems(id, collectionId, dropped), id,
-      { direct: true, destinationName: name, collectionId, files: dropped.files });
+      { direct: true, collectionId, files: dropped.files });
   });
   window.addEventListener('blur', clearDrop);
   bridge.onNativeFileDrop?.(event => {
@@ -807,10 +727,10 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
       if (guidance && guidance !== lastNotice) notify(guidance);
       return;
     }
-    const { id, collectionId, name } = destination;
+    const { id, collectionId } = destination;
     void intake(() => bridge.importNativeFiles(id, collectionId, event.token), id,
-      { direct: true, destinationName: name });
+      { direct: true, collectionId });
   });
 
-  return { create, open, updateQueue, renderPreview };
+  return { create, open, updateQueue, previewItems };
 };
