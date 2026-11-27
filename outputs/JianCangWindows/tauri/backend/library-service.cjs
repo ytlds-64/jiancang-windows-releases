@@ -453,7 +453,9 @@ class LibraryService {
   async mutate(id, command) {
     const registered = this.entry(id);
     const purging = command?.action === 'purgeTrash' || command?.action === 'retryPurge';
-    if (purging && registered.kind !== 'local') throw new Error('永久删除只适用于本地素材库。');
+    if (purging && registered.kind !== 'local' && (registered.kind !== 'jiancang' || command.action !== 'purgeTrash')) {
+      throw new Error('此素材库不支持这项回收站操作。');
+    }
     if (registered.kind === 'eagle') return this.organizeEagle(id, command);
     const entry = this.writable(id);
     if (!purging && !localActions.has(command?.action)) throw new Error('此操作未在见藏中启用。');
@@ -463,17 +465,19 @@ class LibraryService {
       if (!catalog || catalog.cacheKey !== command.catalogRevision) {
         throw new Error('回收站已更新，请重新确认要删除的素材。');
       }
-      const mediaRevisions = new Map();
-      if (command.action === 'purgeTrash') {
-        const all = command.all === true;
-        const ids = all ? [] : command.ids;
-        if (!Array.isArray(ids) || ids.length > 100_000) throw new Error('请选择要删除的素材。');
-        const records = all ? catalog.assets.values() : ids.map(assetId => catalog.assets.get(assetId));
-        for (const asset of records) {
-          if (asset?.trashed && asset.mediaRevision) mediaRevisions.set(asset.id, asset.mediaRevision);
+      if (entry.kind === 'local') {
+        const mediaRevisions = new Map();
+        if (command.action === 'purgeTrash') {
+          const all = command.all === true;
+          const ids = all ? [] : command.ids;
+          if (!Array.isArray(ids) || ids.length > 100_000) throw new Error('请选择要删除的素材。');
+          const records = all ? catalog.assets.values() : ids.map(assetId => catalog.assets.get(assetId));
+          for (const asset of records) {
+            if (asset?.trashed && asset.mediaRevision) mediaRevisions.set(asset.id, asset.mediaRevision);
+          }
         }
+        mutation = { ...command, mediaRevisions, purgeRootIdentity: catalog.identity };
       }
-      mutation = { ...command, mediaRevisions, purgeRootIdentity: catalog.identity };
     }
     if (['undo', 'redo'].includes(command.action)) {
       const { pending, running } = this.queue.summary(id);
@@ -796,6 +800,24 @@ class LibraryService {
 
   asset(id, registrationId) {
     return assetForCatalog(this.catalogs, this.registry.selectedId, id, registrationId);
+  }
+
+  importThumbnailSource(id, taskId) {
+    if (!this.catalogs.has(id) || this.statuses.get(id)?.status !== 'available') return null;
+    const target = this.importEntry(id);
+    const pending = this.queue?.thumbnailSource(id, taskId);
+    if (!pending || (pending.targetLibraryId && pending.targetLibraryId !== target.libraryId)) return null;
+    if (!pending.source) {
+      return { ...pending, open: () => pending.inboxKey ? openInboxOriginal(pending)
+        : openContainedFile(pending.root, pending.path, pending.expectedBytes) };
+    }
+    const { source, assetId } = pending;
+    if (source.targetLibraryId && source.targetLibraryId !== target.libraryId) return null;
+    const donor = this.registry.entries.find(entry => entry.id === source.registrationId && entry.libraryId === source.libraryId)
+      ?? this.registry.entries.find(entry => entry.libraryId === source.libraryId);
+    if (!donor || !this.distinctCatalogs(donor, target)) return null;
+    const original = this.asset(source.assetId, donor.id);
+    return original.asset.trashed ? null : { assetId, original };
   }
 
   original(id, registrationId) {

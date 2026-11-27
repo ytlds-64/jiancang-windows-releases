@@ -257,6 +257,14 @@ function changeCollection(state, command) {
 function mutationFor(state, command) {
   switch (command?.action) {
     case 'edit': case 'trash': case 'restore': return editAssets(state, command);
+    case 'purgeTrash': {
+      const selected = ids(command.ids);
+      if (!selected.length || selected.some(id => !state.assets.get(id)?.trashed)) {
+        throw new Error('回收站已更新，请重新确认要删除的素材。');
+      }
+      const changes = selected.map(id => assetChange(state, id, { life: flag(false) }));
+      return { changes, result: { count: changes.length } };
+    }
     case 'resolveConflict': {
       const { kind, entityId: id, field } = command;
       const delta = { [field]: conflictChoice(state, command) };

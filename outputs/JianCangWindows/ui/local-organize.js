@@ -522,10 +522,15 @@
       });
     }
 
-    function acrossWriter() {
+    function acrossWriter(skipped = 0) {
       let processed = 0;
+      let pendingPurge = 0;
       const pending = new Set();
-      const summary = () => `已处理 ${processed} 项。${pending.size ? ` ${pending.size} 个同步库有待提交记录。` : ''}`;
+      const summary = () => [`已处理 ${processed} 项。`,
+        skipped ? `已跳过 ${skipped} 项只读或暂不可写的素材。` : '',
+        pending.size ? `${pending.size} 个同步库有待提交记录。` : '',
+        pendingPurge ? `${pendingPurge} 份原件等待释放磁盘空间。` : '',
+      ].filter(Boolean).join(' ');
       return {
         summary,
         async write(jobs, status, onIncomplete) {
@@ -539,6 +544,7 @@
                 const result = await request(group.id, command);
                 processed += result.count ?? count;
                 if (result.pending > 0) pending.add(group.id);
+                pendingPurge += result.pendingPurge ?? 0;
                 if (result.failed?.length) {
                   const ids = new Set(result.failed.map(item => item.id));
                   const remaining = command.entries ? { ...command, entries: command.entries.filter(item => ids.has(item.id)) }
@@ -553,14 +559,46 @@
           } finally { onBatchWrite(false); }
           if (failures.length) {
             const remaining = failures.map(item => item.job);
-            onIncomplete(remaining);
-            status.focusSubmit();
+            onIncomplete?.(remaining);
+            status?.focusSubmit();
             throw new Error([`${summary()} ${failures.length} 个库未完成。`, ...failures.map(item => item.message)].join('\n'));
           }
-          status.close();
+          status?.close();
           notify(summary());
         },
       };
+    }
+
+    async function restoreAll(groups, skipped) {
+      const jobs = groups.map(group => ({ group, command: { action: 'restore', ids: group.ids } }));
+      try { await acrossWriter(skipped).write(jobs); }
+      catch (error) { notify(error.message); }
+    }
+
+    function emptyTrash(groups, skipped) {
+      const writer = acrossWriter(skipped);
+      let jobs = groups.map(group => ({ group, command: { action: 'purgeTrash', ids: group.ids,
+        catalogRevision: group.catalogRevision, revision: group.revision } }));
+      open({
+        title: '清空回收站？', subtitle: acrossSummary(groups),
+        submitText: '确认清空回收站', mode: 'across', danger: true,
+        build(body) {
+          body.append(element('p', 'organize-confirm-description', '所列素材将永久删除，包括被搜索或筛选隐藏的素材。此操作无法撤销。'));
+          if (groups.some(group => group.kind === 'local')) {
+            body.append(element('p', 'organize-hint', '本地库中的原件和历史版本也会删除。'));
+          }
+          if (groups.some(group => group.kind === 'jiancang')) {
+            body.append(element('p', 'organize-hint', '同步库会将删除同步到其他设备，云端文件由同步服务管理。'));
+          }
+          showAcrossTargets(body, groups, skipped);
+        },
+        async submit(_content, status) {
+          await writer.write(jobs, status, remaining => {
+            jobs = remaining;
+            status.label(`重试 ${jobs.reduce((total, job) => total + job.command.ids.length, 0)} 项`);
+          });
+        },
+      });
     }
 
     function changeTrashAcrossLibraries(groups, action, skipped) {
@@ -743,7 +781,7 @@
       }
     }
 
-    return { editAssets, renameAssets, collection, collectionChoices, deleteCollection, trash, purgeTrash, retryPurge, restore, undo, redo,
+    return { editAssets, renameAssets, collection, collectionChoices, deleteCollection, trash, purgeTrash, retryPurge, restore, restoreAll, emptyTrash, undo, redo,
       editAcrossLibraries, renameAcrossLibraries, changeTrashAcrossLibraries, addToCollections, removeFromCollection,
       setRating, setRatings, toggleFavorite, setCollectionColor,
       get immediatePending() { return immediatePending; } };

@@ -1725,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "jiancang-tauri"
-version = "0.36.45"
+version = "0.36.46"
 dependencies = [
  "reqwest",
  "serde",

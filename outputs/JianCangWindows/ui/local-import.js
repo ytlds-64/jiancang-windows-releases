@@ -285,7 +285,11 @@ window.createJianCangLocalIntake = ({ bridge, getLibraries, getCopyLibraries, ge
       : /^(?:jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|ico|livp)$/.test(extension) ? 'image'
         : /^(?:mp3|m4a|wav|aac|flac|ogg|opus|aiff?)$/.test(extension) ? 'audio'
           : extension === 'pdf' ? 'pdf' : 'document';
-    return { id, name, sourceName, extension, kind, importing: true };
+    const canPreview = (kind === 'image' || kind === 'video') && /^[a-f0-9]{32}$/.test(task.id);
+    const previewURL = canPreview
+      ? window.jiancangTauriPlatform?.mediaURL('import-thumbnail', task.targetId, task.id)
+      : undefined;
+    return { id, name, sourceName, extension, kind, importing: true, previewURL };
   }
 
   function previewItems() {

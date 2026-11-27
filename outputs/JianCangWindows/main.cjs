@@ -3205,22 +3205,26 @@ function handleLocalWorkflow() {
     const entry = writableLibrary(id);
     let localCommand = command;
     if (command?.action === 'purgeTrash' || command?.action === 'retryPurge') {
-      if (entry.kind !== 'local') throw new Error('永久删除只适用于本地素材库。');
+      if (entry.kind !== 'local' && (entry.kind !== 'jiancang' || command.action !== 'purgeTrash')) {
+        throw new Error('此素材库不支持这项回收站操作。');
+      }
       const catalog = catalogs.get(id);
       if (!catalog || catalog.cacheKey !== command.catalogRevision) {
         throw new Error('回收站已更新，请重新确认要删除的素材。');
       }
-      const mediaRevisions = new Map();
-      if (command.action === 'purgeTrash') {
-        const all = command.all === true;
-        const ids = all ? [] : command.ids;
-        if (!Array.isArray(ids) || ids.length > 100_000) throw new Error('请选择要删除的素材。');
-        const records = all ? catalog.assets.values() : ids.map(assetId => catalog.assets.get(assetId));
-        for (const asset of records) {
-          if (asset?.trashed && asset.mediaRevision) mediaRevisions.set(asset.id, asset.mediaRevision);
+      if (entry.kind === 'local') {
+        const mediaRevisions = new Map();
+        if (command.action === 'purgeTrash') {
+          const all = command.all === true;
+          const ids = all ? [] : command.ids;
+          if (!Array.isArray(ids) || ids.length > 100_000) throw new Error('请选择要删除的素材。');
+          const records = all ? catalog.assets.values() : ids.map(assetId => catalog.assets.get(assetId));
+          for (const asset of records) {
+            if (asset?.trashed && asset.mediaRevision) mediaRevisions.set(asset.id, asset.mediaRevision);
+          }
         }
+        localCommand = { ...command, mediaRevisions, purgeRootIdentity: catalog.identity };
       }
-      localCommand = { ...command, mediaRevisions, purgeRootIdentity: catalog.identity };
     }
     if (entry.kind === 'local' && (command?.action === 'undo' || command?.action === 'redo')) {
       const imports = localImportError ? null : localImports?.summary(id);

@@ -22,14 +22,16 @@ const audio = new Map(Object.entries({ mp3: 'audio/mpeg', m4a: 'audio/mp4', aac:
   wma: 'audio/x-ms-wma', aif: 'audio/aiff', aiff: 'audio/aiff', ape: 'audio/ape' }));
 const heifExtensions = new Set(['heic', 'heif']);
 const heifBrands = new Set(['heic', 'heix', 'heim', 'heis', 'mif1']);
-const supportedThumbnailInputs = new Set([...images.keys(), ...movies.keys(), ...heifExtensions,
-  'mkv', 'avi', 'mts', 'm2ts', 'ts', 'wmv', 'flv', 'mpeg', 'mpg', '3gp']);
+const posterVideoExtensions = new Set([...movies.keys(), 'mkv', 'avi', 'mts', 'm2ts', 'ts', 'wmv', 'flv', 'mpeg', 'mpg', '3gp']);
+const supportedThumbnailInputs = new Set([...images.keys(), ...posterVideoExtensions, ...heifExtensions]);
 const roles = new Set(['thumbnail', 'original', 'video', 'live-motion', 'board-image', 'palette-image', 'edit-image', 'pdf-original', 'text-preview']);
 const imageRoles = new Set(['thumbnail', 'original', 'board-image', 'palette-image']);
 const imageThumbnailLimit = 64 * 1024 ** 2;
 const videoThumbnailLimit = 32 * 1024 ** 3;
 const legacyVideoStagingLimit = 512 * 1024 ** 2;
 const thumbnailBytes = 2 * 1024 ** 2;
+const importThumbnailRequests = 64;
+const importThumbnailCacheEntries = 32;
 const heifDemuxers = 'mov,mp4,m4a,3gp,3g2,mj2';
 const thumbnailDemuxers = `image2,${heifDemuxers},matroska,webm,ogg,avi,mpegts,jpeg_pipe,png_pipe,webp_pipe,bmp_pipe,gif,mjpeg`;
 const waveformDemuxers = `aac,${heifDemuxers},mp3,wav,flac,ogg,aiff,asf,ape`;
@@ -148,13 +150,14 @@ async function inspectSingleHeif(ffmpeg, file, signal) {
   return image.side_data_list?.some(data => data.side_data_type === 'ICC Profile');
 }
 
-async function thumbnailFrame(ffmpeg, file, signal, edge, heif) {
+async function thumbnailFrame(ffmpeg, file, signal, edge, heif, stdin = 'ignore') {
   const hasProfile = heif && await inspectSingleHeif(ffmpeg, file, signal);
   const scale = heif ? `scale='min(iw,${edge})':'min(ih,${edge})':force_original_aspect_ratio=decrease`
     : 'scale=640:640:force_original_aspect_ratio=decrease';
-  const bytes = await boundedToolOutput(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-protocol_whitelist', 'file',
+  const bytes = await boundedToolOutput(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin',
+    '-protocol_whitelist', stdin === 'ignore' ? 'file' : 'fd',
     '-format_whitelist', thumbnailDemuxers, ...toolInputLimits, '-i', file, '-map', '0:v:0', '-an', '-vf', scale,
-    '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-threads', '1', 'pipe:1'], signal, thumbnailBytes);
+    '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-threads', '1', 'pipe:1'], signal, thumbnailBytes, stdin);
   if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || (hasProfile && !bytes.includes('ICC_PROFILE\x00'))) {
     throw new Error('预览格式无效。');
   }
@@ -175,22 +178,23 @@ async function sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack, stdin
   return bytes;
 }
 
+async function choosePosterFrame(duration, sample, signal, fromStart = false) {
+  const known = Number.isFinite(duration) && duration > 0;
+  const first = known ? Math.min(8, duration * .12) : fromStart ? 0 : 2;
+  const second = known ? Math.min(24, duration * .35) : fromStart ? 2 : 8;
+  const positions = second > first + .75 ? [first, second] : [first];
+  for (const seconds of positions) {
+    try { return await sample(seconds, true); }
+    catch { signal.throwIfAborted(); }
+  }
+  return sample(0, false);
+}
+
 async function videoPoster(ffmpeg, original, shutdown) {
   const { library, asset, file, candidates } = original;
   const signal = AbortSignal.any([shutdown, AbortSignal.timeout(18_000)]);
-  const knownDuration = Number.isFinite(asset.duration) && asset.duration > 0;
-  const first = knownDuration ? Math.min(8, asset.duration * .12) : 2;
-  const second = knownDuration ? Math.min(24, asset.duration * .35) : 8;
-  async function chooseFrame(sample) {
-    const candidates = second > first + .75 ? [first, second] : [first];
-    for (const seconds of candidates) {
-      try { return await sample(seconds, true); }
-      catch { signal.throwIfAborted(); }
-    }
-    return sample(0, false);
-  }
   if (await toolInputProtocol(ffmpeg) === 'fd') {
-    return chooseFrame(async (seconds, skipBlack) => {
+    return choosePosterFrame(asset.duration, async (seconds, skipBlack) => {
       // Like video metadata and playback, resolve only a contained, validated
       // original. The inherited handle also avoids staging large videos.
       const { handle } = await openAsset(original, signal);
@@ -203,14 +207,64 @@ async function videoPoster(ffmpeg, original, shutdown) {
         }
         return bytes;
       } finally { await handle.close(); }
-    });
+    }, signal);
   }
   // Keep old FFmpeg versions working within their original staging limit.
   if (asset.byteCount > legacyVideoStagingLimit) return null;
-  const decode = input => chooseFrame((seconds, skipBlack) => sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack));
+  const decode = input => choosePosterFrame(asset.duration,
+    (seconds, skipBlack) => sampleVideoFrame(ffmpeg, input, signal, seconds, skipBlack), signal);
   const folder = fileDirectory(library);
   return folder ? withReadOnlyThumbnailFile(folder, file, asset.byteCount, signal, decode)
     : withVerifiedThumbnailFile(library.root, candidates || [file], asset, signal, decode);
+}
+
+function pendingFileStamp(stat) {
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+}
+
+async function pendingFileThumbnail(source, ffmpeg, signal, cache) {
+  const extension = path.extname(source.name).slice(1).toLowerCase();
+  const video = posterVideoExtensions.has(extension);
+  const heif = heifExtensions.has(extension);
+  if (!ffmpeg || (!video && !heif && (!images.has(extension) || extension === 'ico'))) return null;
+  const handle = await source.open();
+  try {
+    signal.throwIfAborted();
+    const stat = await handle.stat({ bigint: true });
+    if (stat.size <= 0n || stat.size > BigInt(video ? videoThumbnailLimit : imageThumbnailLimit)) return null;
+    const stamp = pendingFileStamp(stat);
+    const cacheKey = source.assetId + ':' + stamp;
+    const unchanged = async () => pendingFileStamp(await handle.stat({ bigint: true })) === stamp &&
+      pendingFileStamp(await fs.lstat(source.path, { bigint: true })) === stamp;
+    const cached = cache.get(cacheKey);
+    if (cached) return await unchanged() ? cached : null;
+    const useHandle = !heif && await toolInputProtocol(ffmpeg) === 'fd';
+    if (video && !useHandle) return null;
+    let bytes;
+    if (video) {
+      bytes = await choosePosterFrame(null, async (seconds, skipBlack) => {
+        // FFmpeg advances the inherited handle's offset. Each seek starts with
+        // its own fresh, independently validated descriptor.
+        const sample = await source.open();
+        try {
+          if (pendingFileStamp(await sample.stat({ bigint: true })) !== stamp) throw new Error('源文件已变化。');
+          const frame = await sampleVideoFrame(ffmpeg, 'fd:', signal, seconds, skipBlack, sample.fd);
+          if (pendingFileStamp(await sample.stat({ bigint: true })) !== stamp) throw new Error('源文件已变化。');
+          return frame;
+        } finally { await sample.close(); }
+      }, signal, true);
+    } else if (useHandle) {
+      bytes = await thumbnailFrame(ffmpeg, 'fd:', signal, 640, false, handle.fd);
+    } else {
+      bytes = await withReadOnlyThumbnailFile(source.root, source.path, Number(stat.size), signal,
+        input => thumbnailFrame(ffmpeg, input, signal, 640, heif));
+    }
+    signal.throwIfAborted();
+    if (!(await unchanged())) return null;
+    if (cache.size >= importThumbnailCacheEntries) cache.delete(cache.keys().next().value);
+    cache.set(cacheKey, bytes);
+    return bytes;
+  } finally { await handle.close(); }
 }
 
 async function decodeHeifStill(bytes, signal, decode) {
@@ -260,6 +314,10 @@ function mediaHandler(service) {
   let pendingStillBytes = 0;
   let generation = 0;
   let clearing = null;
+  const importCache = new Map();
+  const importLanes = [Promise.resolve(), Promise.resolve()];
+  let importLane = 0;
+  let importRequests = 0;
 
   async function generateThumbnail(original, edge = 640, still) {
     const { library, asset, file, candidates } = original;
@@ -375,11 +433,52 @@ function mediaHandler(service) {
       await sendFile(request, response, handle, asset.byteCount, type, signal, 0, extra);
     } finally { await handle.close(); }
   };
+  serve.importThumbnail = async (request, response, registrationId, taskId, requestSignal) => {
+    const unavailable = () => new Error('这份素材暂时没有可用的导入预览。');
+    if (importRequests >= importThumbnailRequests) throw unavailable();
+    const lane = importLane;
+    importLane = (importLane + 1) % importLanes.length;
+    importRequests++;
+    const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(12_000)]);
+    const work = importLanes[lane].then(async () => {
+      signal.throwIfAborted();
+      const source = service.importThumbnailSource(registrationId, taskId);
+      if (!source) throw unavailable();
+      if (source.original) {
+        const { library, asset, sourceThumbnail } = source.original;
+        if (asset.kind !== 'video' && asset.kind !== 'image') throw unavailable();
+        const type = sourceThumbnail && images.get(sourceThumbnail.extension);
+        if (type && sourceThumbnail.byteCount <= thumbnailBytes) {
+          await checkFolder(library);
+          const handle = await openContainedFile(path.join(library.root, 'images'),
+            sourceThumbnail.file, sourceThumbnail.byteCount).catch(() => null);
+          if (handle) {
+            try {
+              signal.throwIfAborted();
+              if (service.importThumbnailSource(registrationId, taskId)?.assetId !== source.assetId) throw unavailable();
+              await sendFile(request, response, handle, sourceThumbnail.byteCount, type, signal);
+              return;
+            } finally { await handle.close(); }
+          }
+        }
+      }
+      const bytes = source.original ? await generateThumbnail(source.original)
+        : await pendingFileThumbnail(source, service.ffmpeg, signal, importCache);
+      signal.throwIfAborted();
+      if (!bytes || service.importThumbnailSource(registrationId, taskId)?.assetId !== source.assetId) throw unavailable();
+      sendBytes(request, response, bytes, 'image/jpeg');
+    });
+    importLanes[lane] = work.catch(() => {});
+    try { await work; }
+    catch { throw unavailable(); }
+    finally { importRequests--; }
+  };
   serve.thumbnailStatus = disk.status;
   serve.clearThumbnails = () => {
     if (clearing) return clearing;
     generation++;
     cache.clear();
+    importCache.clear();
     clearing = disk.clear().finally(() => { clearing = null; });
     return clearing;
   };

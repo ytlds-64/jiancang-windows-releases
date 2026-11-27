@@ -25,6 +25,7 @@ const { listStudio, writeStudio } = require('../../studio-sync.cjs');
 
 const maximumCommandBytes = 4 * 1024 * 1024;
 const matchesMedia = /^\/media\/([a-z-]+)\/([a-f0-9-]{1,64})\/([a-f0-9]{64})$/;
+const matchesImportThumbnail = /^\/media\/(import-thumbnail)\/([a-f0-9-]{1,64})\/([a-f0-9]{32})$/;
 
 function respond(response, status, result) {
   const bytes = Buffer.from(JSON.stringify(result), 'utf8');
@@ -221,10 +222,12 @@ async function start(profile, version, installed, downloads) {
         const value = await dispatch(name, args);
         respond(response, 200, { ok: true, value: libraryResponse(value, name, args) ?? null });
       } else {
-        const media = ['GET', 'HEAD'].includes(request.method) && matchesMedia.exec(pathname);
+        const media = ['GET', 'HEAD'].includes(request.method) &&
+          (matchesImportThumbnail.exec(pathname) ?? matchesMedia.exec(pathname));
         if (!media) { respond(response, 404, { ok: false, error: '此资源不存在。' }); return; }
         const [role, library, asset] = media.slice(1);
-        if (role === 'trim-preview') await video.servePreview(request, response, role, library, asset, signal);
+        if (role === 'import-thumbnail') await serveMedia.importThumbnail(request, response, library, asset, signal);
+        else if (role === 'trim-preview') await video.servePreview(request, response, role, library, asset, signal);
         else await serveMedia(request, response, role, library, asset, signal);
       }
     } catch (error) {

@@ -512,7 +512,7 @@ test('migrates explicit Eagle update, stale baselines and batch changes through 
   const enabled = await service.command('eagle:configure-write', [id, true]);
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.state.libraries[0].eagleWritable, true);
-  await assert.rejects(service.command('local:mutate', [id, { action: 'purgeTrash', ids: [asset] }]), /只适用于本地/);
+  await assert.rejects(service.command('local:mutate', [id, { action: 'purgeTrash', ids: [asset] }]), /不支持这项回收站操作/);
   assert.deepEqual(service.captureLibraries(), []);
   const edited = await service.command('eagle:edit', [id, asset, { rating: 4 }, { rating: 2 }]);
   assert.equal(edited.state.library.assets[0].rating, 4);
@@ -569,7 +569,7 @@ test('controls format-6 two-way sync, captured originals, durable retry and conn
   await assert.rejects(call('local:mutate', [id, { action: 'createCollection', name: '未授权的写入' }]), /开启双向同步/);
   assert.deepEqual(await fs.readdir(path.join(root, 'changes')), []);
   assert.equal((await call('sync:configure-write', [id, true])).state.libraries.find(item => item.id === id).syncWritable, true);
-  await assert.rejects(call('local:mutate', [id, { action: 'purgeTrash', all: true }]), /只适用于本地/);
+  await assert.rejects(call('local:mutate', [id, { action: 'purgeTrash', all: true }]), /重新确认/);
   const { activeLibraryId: siblingID } = await call('library:choose', ['jiancang', sibling]);
   await assert.rejects(call('sync:configure-write', [siblingID, true]), /另一个文件夹开启写入/);
   await call('library:switch', [id]);
@@ -620,4 +620,26 @@ test('controls format-6 two-way sync, captured originals, durable retry and conn
   const resolved = await call('sync-conflicts:resolve', [id, { ...choice, value: '请求中注入的备注' }]);
   assert.equal(resolved.state.library.assets[0].note, 'iPhone 备注');
   assert.equal((await call('sync-conflicts:list', [id])).total, 0);
+
+  const originalFile = service.original(checksum, id).file;
+  const change = action => call('local:mutate', [id, { action, ids: [checksum] }]);
+  const purge = ({ catalogs }, ids = [checksum]) => call('local:mutate', [id, { action: 'purgeTrash', ids,
+    catalogRevision: catalogs.find(catalog => catalog.libraryId === id).revision }]);
+  const trashed = await change('trash');
+  assert.equal(trashed.state.library.assets[0].trashed, true);
+  assert.equal((await change('restore')).state.library.assets[0].trashed, false);
+  await assert.rejects(purge(trashed.state), /重新确认/);
+  await assert.rejects(purge(service.state()), /重新确认/);
+
+  const currentTrash = (await change('trash')).state;
+  await assert.rejects(purge(currentTrash, [checksum, 'a'.repeat(64)]), /重新确认/);
+  assert.equal(service.state().library.assets[0].trashed, true);
+  const deleted = await purge(currentTrash);
+  assert.equal(deleted.count, 1);
+  assert.equal(deleted.pending, 0);
+  assert.deepEqual(deleted.state.library.assets, []);
+  const deletion = JSON.parse(await fs.readFile(await call('sync:latest-record-path', [id]), 'utf8'));
+  assert.deepEqual(deletion.changes, { life: { bool: { _0: false } } });
+  assert.equal(deletion.entityID, checksum);
+  assert.deepEqual(await fs.readFile(originalFile), image);
 });

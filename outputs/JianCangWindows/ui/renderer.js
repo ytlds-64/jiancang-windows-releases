@@ -2019,6 +2019,43 @@ function navigationCount(id) {
   return id === 'stash' ? selectionStash.size : (totals.get(id) || 0);
 }
 
+function trashMenuTargets(scope) {
+  const groups = [];
+  let skipped = 0;
+  for (const { libraryId: id, library, revision: catalogRevision } of catalogEntries()) {
+    if (scope !== null && scope !== id) continue;
+    const ids = library.assets.filter(asset => asset.trashed).map(asset => asset.id);
+    if (!ids.length) continue;
+    if (canOrganizeFromMenu(id) && !trashWriteInProgress(id)) {
+      groups.push({ id, ids, name: library.directoryName, kind: library.kind, catalogRevision, revision: library.revision });
+    } else {
+      skipped += ids.length;
+    }
+  }
+  const count = groups.reduce((total, group) => total + group.ids.length, 0);
+  return { groups, count, skipped };
+}
+
+async function showTrashMenu(event, invoker) {
+  const scope = scopeId;
+  const { count, skipped } = trashMenuTargets(scope);
+  const enabled = count > 0 && !batchWorking && !crossLibraryWrite && !organizer.immediatePending;
+  const heading = count + skipped
+    ? `${counts.format(count + skipped)} 项素材${skipped ? ` · ${counts.format(skipped)} 项暂不可操作` : ''}`
+    : '回收站为空';
+  closeWorkspaceMenus();
+  const action = await window.jiancangAssetContextMenu.showMenu([
+    { label: '还原全部', action: 'restore', enabled },
+    null,
+    { label: '清空回收站…', action: 'purge', enabled, danger: true },
+  ], assetMenuAnchor(event, invoker), '回收站操作', { heading, invoker });
+  if (!action || scopeId !== scope || batchWorking || crossLibraryWrite || organizer.immediatePending) return;
+  const targets = trashMenuTargets(scope);
+  if (!targets.count) { showToast('回收站已更新，没有可操作的素材。'); return; }
+  if (action === 'restore') await organizer.restoreAll(targets.groups, targets.skipped);
+  if (action === 'purge') organizer.emptyTrash(targets.groups, targets.skipped);
+}
+
 function renderNavigation() {
   collectionOrder.beforeRender();
   const views = byId('library-views');
@@ -2027,6 +2064,10 @@ function renderNavigation() {
       !smart.active && section === view.id, () => selectView(view.id));
     row.dataset.section = view.id;
     if (view.id === 'untagged') button.title = '查看未添加标签的素材';
+    if (view.id === 'trash') {
+      button.setAttribute('aria-haspopup', 'menu');
+      row.addEventListener('contextmenu', event => { event.preventDefault(); void showTrashMenu(event, button); });
+    }
     return row;
   }));
   const tree = byId('collection-tree');
@@ -2225,6 +2266,10 @@ function loadImageSources(image, locations, { loaded, failed, decoded = false } 
 }
 
 function loadThumbnail(image, asset, canUseOriginal, handlers) {
+  if (asset.importing) {
+    loadImageSources(image, [asset.previewURL], handlers);
+    return;
+  }
   loadImageSources(image, [assetURL('thumbnail', asset), canUseOriginal && assetURL('original', asset)], handlers);
 }
 
@@ -2238,7 +2283,7 @@ function mountCardThumbnail(picture, asset, button) {
   }
   thumbnail.alt = '';
   thumbnail.loading = 'lazy';
-  thumbnail.decoding = 'sync';
+  thumbnail.decoding = asset.importing ? 'async' : 'sync';
   thumbnail.draggable = false;
   loadThumbnail(thumbnail, asset, asset.available && (asset.kind === 'image' || asset.extension === 'livp'), {
     loaded: () => {
@@ -2276,6 +2321,7 @@ function makeCard(asset, isList) {
     const frame = node('span', 'asset-frame');
     picture.dataset.kind = asset.kind;
     picture.append(glyph(kindIcon(asset.kind)));
+    if (asset.previewURL) mountCardThumbnail(picture, asset, card);
     if (!isList && (asset.kind !== 'image' || asset.extension === 'livp')) {
       picture.append(node('span', 'asset-filetype', asset.extension === 'livp' ? 'LIVE' :
         (asset.extension || labels[asset.kind] || '文件').toUpperCase()));

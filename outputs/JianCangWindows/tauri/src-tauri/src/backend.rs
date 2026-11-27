@@ -284,8 +284,8 @@ fn valid_media_path(path: &str) -> bool {
     else {
         return false;
     };
-    let role_allowed = matches!(
-        role,
+    let asset_length = match role {
+        "import-thumbnail" => 32,
         "thumbnail"
             | "original"
             | "video"
@@ -295,14 +295,14 @@ fn valid_media_path(path: &str) -> bool {
             | "edit-image"
             | "pdf-original"
             | "text-preview"
-            | "trim-preview"
-    );
-    role_allowed
-        && !library.is_empty()
+            | "trim-preview" => 64,
+        _ => return false,
+    };
+    !library.is_empty()
         && library.len() <= 64
         && library
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-        && asset.len() == 64
+        && asset.len() == asset_length
         && asset.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

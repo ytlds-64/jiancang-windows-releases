@@ -54,7 +54,7 @@ async function openInboxOriginal(source) {
   }
   try {
     await stat();
-    return { stat, read: (...args) => handle.read(...args), close: () => handle.close() };
+    return { fd: handle.fd, stat, read: (...args) => handle.read(...args), close: () => handle.close() };
   } catch (error) { await handle.close(); throw error; }
 }
 

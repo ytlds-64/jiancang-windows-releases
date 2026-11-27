@@ -269,6 +269,23 @@ test('stock Node private bridge manages local libraries and reads Eagle and veri
     await fs.writeFile(clip, videoBytes);
     await command('local-import:set-paused', localID, true);
     await command('local-import:choose', localID, collection, [clip]);
+    const { tasks: [pendingClip] } = await command('local-import:list', localID);
+    assert.equal(pendingClip.status, 'pending');
+    const pendingPath = `${backend.url}/media/import-thumbnail/${localID}/${pendingClip.id}`;
+    assert.equal((await fetch(pendingPath)).status, 401);
+    assert.equal((await media('import-thumbnail', randomUUID(), pendingClip.id)).status, 404);
+    assert.equal((await media('original', localID, pendingClip.id)).status, 404);
+    if (process.env.JIANCANG_QA_VIDEO && process.env.JIANCANG_FFMPEG_PATH) {
+      const poster = await media('import-thumbnail', localID, pendingClip.id);
+      assert.equal(poster.status, 200);
+      assert.equal(poster.headers.get('content-type'), 'image/jpeg');
+      assert.equal(poster.headers.get('cache-control'), 'no-store');
+      assert.deepEqual(Buffer.from(await poster.arrayBuffer()).subarray(0, 2), Buffer.from([0xff, 0xd8]));
+
+      await fs.writeFile(clip, mp4Header);
+      assert.equal((await media('import-thumbnail', localID, pendingClip.id)).status, 404);
+      await fs.writeFile(clip, videoBytes);
+    }
     const pendingRemoval = await command('library:remove', localID);
     assert.equal(pendingRemoval.activeLibraryId, localID);
     assert.match(pendingRemoval.message, /导入结束/);
@@ -276,6 +293,7 @@ test('stock Node private bridge manages local libraries and reads Eagle and veri
     const cancelledQueue = await command('local-import:list', localID, false);
     assert.equal(cancelledQueue.paused, true);
     assert.equal(cancelledQueue.summary.pending, 0);
+    assert.equal((await media('import-thumbnail', localID, pendingClip.id)).status, 404);
     assert.deepEqual(await fs.readFile(clip), videoBytes);
     await command('local-import:choose', localID, collection, [clip]);
     await command('local-import:set-paused', localID, false);
@@ -454,10 +472,21 @@ test('browser drag imports large originals in bounded chunks and preserves the t
 
     const sourceURL = 'https://example.com/articles/reference-photo';
     const file = new File([image], '网页原图.bmp', { type: 'image/bmp' });
+    await command('local-import:set-paused', id, true);
     const imported = await window.bridge.dropWebImages(id, collection, [file], { sourceURL });
     assert.equal(imported.ok, true);
     assert.equal(receivedSizes.length, Math.ceil(image.length / maximumChunkBytes));
     assert.equal(receivedSizes.reduce((total, size) => total + size, 0), image.length);
+    const { tasks: [pendingImage] } = await command('local-import:list', id);
+    assert.equal(pendingImage.status, 'pending');
+    assert.deepEqual((await command('library:state')).library.assets, []);
+    if (process.env.JIANCANG_FFMPEG_PATH) {
+      const preview = await media('import-thumbnail', id, pendingImage.id);
+      assert.equal(preview.status, 200);
+      assert.equal(preview.headers.get('content-type'), 'image/jpeg');
+      assert.deepEqual(Buffer.from(await preview.arrayBuffer()).subarray(0, 2), Buffer.from([0xff, 0xd8]));
+    }
+    await command('local-import:set-paused', id, false);
     image[54] = 23;
     const inline = await window.bridge.dropWebImages(id, collection, [], {
       imageURL: [`data:image/bmp;base64,${image.toString('base64')}`], sourceURL,
@@ -467,6 +496,7 @@ test('browser drag imports large originals in bounded chunks and preserves the t
       const { library } = await command('library:state');
       return library.assets.length === 2 && library.assets;
     });
+    assert.equal((await media('import-thumbnail', id, pendingImage.id)).status, 404);
     for (const asset of assets) {
       assert.equal(asset.byteCount, image.length);
       assert.equal(asset.sourceURL, sourceURL);

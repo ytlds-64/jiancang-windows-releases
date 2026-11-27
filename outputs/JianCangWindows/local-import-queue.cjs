@@ -344,6 +344,22 @@ class LocalImportQueue {
     return { inlineRevision, tasks, ...(incremental && { removed: changed.filter(id => !returned.has(id)) }) };
   }
 
+  thumbnailSource(targetId, taskId) {
+    if (!this.#db || !validID(targetId) || !validID(taskId, TASK_ID)) return null;
+    const row = this.#db.prepare(`
+      SELECT asset_id, source_json, staged_bytes FROM tasks
+      WHERE target_id = ? AND id = ? AND status IN ('pending', 'running')
+    `).get(targetId, taskId);
+    if (!row) return null;
+    const source = validatedSource(JSON.parse(row.source_json), true);
+    if (source.kind === 'buffer' || source.kind === 'staged-video') {
+      return { ...source, kind: 'file', root: this.#stage, path: this.#stageFile(taskId, source.kind),
+        expectedBytes: row.staged_bytes, assetId: row.asset_id };
+    }
+    if (source.kind === 'catalog') return { source, assetId: row.asset_id };
+    return source.kind === 'file' ? { ...source, assetId: row.asset_id } : null;
+  }
+
   #recordInlineChange(targetId, id) {
     let changes = this.#inlineChanges.get(targetId);
     if (!changes) {
