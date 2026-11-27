@@ -815,7 +815,8 @@ class DirectorySyncWriter {
       const extension = linkOnly ? 'url' : safeExtension(path.extname(input.filename ?? '').slice(1).toLowerCase());
       const prepared = await prepareSyncOriginal({ directory: this.staging, open: input.open,
         bytes: linkOnly ? Buffer.from(`[InternetShortcut]\r\nURL=${sourceURL}\r\n`, 'utf8') : input.bytes,
-        fileExtension: extension, onProgress: report && (fraction => report(fraction * 0.5)) });
+        fileExtension: extension, onProgress: report && (fraction => report(fraction * 0.5)),
+        captureThumbnailProof: input.captureThumbnailProof });
       let retained = false;
       try {
         const id = prepared.blob.sha256;
@@ -851,8 +852,10 @@ class DirectorySyncWriter {
         }
         this.#queue(producer, state, changes, { staged, job: { id: input.jobId, assetId: id, existing } });
         retained = !existing;
-        await this.#drain(entry, producer, state, publication);
-        return { id, existing, ...this.status(libraryId) };
+        const published = await this.#drain(entry, producer, state, publication);
+        return { id, existing, ...this.status(libraryId), ...(!existing && published && prepared.sourceStamp && {
+          thumbnailProof: { sourceStamp: prepared.sourceStamp, verifiedHash: id },
+        }) };
       } finally { if (!retained) await prepared.discard().catch(() => {}); }
     });
   }

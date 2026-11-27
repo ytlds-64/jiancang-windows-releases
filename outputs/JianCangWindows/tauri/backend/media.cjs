@@ -256,11 +256,10 @@ async function pendingFileThumbnail(source, ffmpeg, signal, cache) {
     const stat = await handle.stat({ bigint: true });
     if (stat.size <= 0n || stat.size > BigInt(video ? videoThumbnailLimit : imageThumbnailLimit)) return null;
     const stamp = pendingFileStamp(stat);
-    const cacheKey = source.assetId + ':' + stamp;
     const unchanged = async () => pendingFileStamp(await handle.stat({ bigint: true })) === stamp &&
       pendingFileStamp(await fs.lstat(source.path, { bigint: true })) === stamp;
-    const cached = cache.get(cacheKey);
-    if (cached) return await unchanged() ? cached : null;
+    const cached = cache.get(source.assetId);
+    if (cached?.stamp === stamp && cached.extension === extension) return await unchanged() ? cached.bytes : null;
     const useHandle = !heif && await toolInputProtocol(ffmpeg) === 'fd';
     if (video && !useHandle) return null;
     let bytes;
@@ -285,7 +284,9 @@ async function pendingFileThumbnail(source, ffmpeg, signal, cache) {
     signal.throwIfAborted();
     if (!(await unchanged())) return null;
     if (cache.size >= importThumbnailCacheEntries) cache.delete(cache.keys().next().value);
-    cache.set(cacheKey, bytes);
+    const kind = video ? 'video' : 'image';
+    cache.set(source.assetId, { bytes, stamp, kind, extension, duration: null,
+      rendition: thumbnailRendition({ kind, extension }, 640, false) });
     return bytes;
   } finally { await handle.close(); }
 }
@@ -329,18 +330,67 @@ async function sendFile(request, response, handle, size, type, signal, offset = 
   await pipeline(stream, response, { signal });
 }
 
+function thumbnailRendition(asset, edge, still) {
+  if (asset.kind === 'audio') return 'tauri-audio-waveform-640-v1';
+  if (still || heifExtensions.has(asset.extension)) return `tauri-heif-jpeg-${edge}-v1`;
+  return asset.kind === 'video' ? 'tauri-video-jpeg-640-v3' : 'tauri-jpeg-640-v1';
+}
+
 function mediaHandler(service) {
   const cache = new Map();
   const jobs = new Map();
   const disk = createThumbnailCache(path.join(service.profile, 'thumbnail-cache-v1'), { maxEntryBytes: thumbnailBytes + 1 });
   let decodeQueue = Promise.resolve();
+  let queuedDecodes = 0;
   let pendingStillBytes = 0;
   let generation = 0;
   let clearing = null;
-  const importCache = new Map();
+  let importCache = new Map();
+  const committedImports = new Map();
   const importLanes = [Promise.resolve(), Promise.resolve()];
   let importLane = 0;
   let importRequests = 0;
+
+  function rememberImportedThumbnail(proof) {
+    const preview = importCache.get(proof.provisionalId);
+    if (!preview || preview.stamp !== proof.sourceStamp) return;
+    const key = `${proof.registrationId}:${proof.id}`;
+    if (committedImports.size >= importThumbnailCacheEntries) committedImports.delete(committedImports.keys().next().value);
+    committedImports.set(key, { proof, preview });
+  }
+
+  async function reuseImportedThumbnail(original, rendition) {
+    const { library, asset } = original;
+    const key = `${library.registrationId}:${asset.id}`;
+    const candidate = committedImports.get(key);
+    if (!candidate) return null;
+    const { proof, preview } = candidate;
+    if (library.root !== proof.root || library.publicLibrary.libraryId !== proof.libraryId || asset.trashed ||
+        !asset.available || asset.kind !== preview.kind || asset.extension !== preview.extension ||
+        (asset.duration ?? null) !== preview.duration || rendition !== preview.rendition) return null;
+    const signal = service.shutdown.signal;
+    try {
+      if (library.publicLibrary.kind === 'local') {
+        if (!proof.destinationStamp || proof.mediaRevision !== asset.mediaRevision) return null;
+        const { handle } = await openAsset(original, signal);
+        try { if (pendingFileStamp(await handle.stat({ bigint: true })) !== proof.destinationStamp) return null; }
+        finally { await handle.close(); }
+      } else if (library.publicLibrary.kind === 'jiancang' && library.publicLibrary.format === 6) {
+        if (proof.verifiedHash !== asset.id) return null;
+        const { handle } = await openAsset(original, signal);
+        await handle.close();
+      } else return null;
+      return committedImports.get(key) === candidate ? preview.bytes : null;
+    } catch {
+      signal.throwIfAborted();
+      return null;
+    }
+  }
+
+  function rememberThumbnail(key, bytes) {
+    if (cache.size >= 64) cache.delete(cache.keys().next().value);
+    cache.set(key, bytes);
+  }
 
   async function generateThumbnail(original, edge = 640, still) {
     const { library, asset, file, candidates } = original;
@@ -348,41 +398,51 @@ function mediaHandler(service) {
     await clearing?.catch(() => {});
     const heif = Boolean(still) || heifExtensions.has(asset.extension);
     const waveform = asset.kind === 'audio';
-    const rendition = waveform ? 'tauri-audio-waveform-640-v1' : heif ? `tauri-heif-jpeg-${edge}-v1`
-      : asset.kind === 'video' ? 'tauri-video-jpeg-640-v3' : 'tauri-jpeg-640-v1';
+    const rendition = thumbnailRendition(asset, edge, still);
     const key = JSON.stringify([rendition, library.registrationId, library.root, library.identity,
       library.publicLibrary.libraryId, asset.id, asset.mediaRevision ?? asset.id, asset.extension, asset.byteCount]);
     if (cache.has(key)) return cache.get(key);
     if (jobs.has(key)) return jobs.get(key);
     const stillSize = still?.length ?? 0;
-    if (jobs.size >= 32 || pendingStillBytes + stillSize > imageThumbnailLimit) return null;
+    if (pendingStillBytes + stillSize > imageThumbnailLimit) return null;
     pendingStillBytes += stillSize;
     const started = generation;
-    const job = decodeQueue.then(async () => {
+    const job = (async () => {
       const signal = service.shutdown.signal;
       signal.throwIfAborted();
-      await checkFolder(library);
-      const stored = (await disk.get(key))?.bytes;
-      const decode = waveform ? input => audioWaveform(service.ffmpeg, input, signal)
-        : input => thumbnailFrame(service.ffmpeg, input, signal, edge, heif);
-      const folder = fileDirectory(library);
-      const bytes = stored ?? (asset.kind === 'video' ? await videoPoster(service.ffmpeg, original, signal)
-        : still ? await decodeHeifStill(still, signal, decode)
-        : folder ? await withReadOnlyThumbnailFile(folder, file, asset.byteCount, signal, decode)
-        : await withVerifiedThumbnailFile(library.root, candidates || [file], asset, signal, decode));
-      if (!bytes) return null;
-      if (started === generation) {
-        if (cache.size >= 64) cache.delete(cache.keys().next().value);
-        cache.set(key, bytes);
-        if (!stored) await disk.set(key, { bytes, type: waveform ? waveformType : 'image/jpeg' });
+      const stored = await disk.get(key);
+      if (stored) {
+        signal.throwIfAborted();
+        await checkFolder(library);
+        if (started === generation) rememberThumbnail(key, stored.bytes);
+        return stored.bytes;
       }
-      return bytes;
-    }).catch(() => null).finally(() => {
+      if (queuedDecodes >= 32) return null;
+      queuedDecodes++;
+      const decodeJob = decodeQueue.then(async () => {
+        signal.throwIfAborted();
+        await checkFolder(library);
+        const decode = waveform ? input => audioWaveform(service.ffmpeg, input, signal)
+          : input => thumbnailFrame(service.ffmpeg, input, signal, edge, heif);
+        const folder = fileDirectory(library);
+        const reused = await reuseImportedThumbnail(original, rendition);
+        const bytes = reused ?? await (asset.kind === 'video' ? videoPoster(service.ffmpeg, original, signal)
+          : still ? decodeHeifStill(still, signal, decode)
+          : folder ? withReadOnlyThumbnailFile(folder, file, asset.byteCount, signal, decode)
+          : withVerifiedThumbnailFile(library.root, candidates || [file], asset, signal, decode));
+        if (bytes && started === generation) {
+          rememberThumbnail(key, bytes);
+          await disk.set(key, { bytes, type: waveform ? waveformType : 'image/jpeg' });
+        }
+        return bytes;
+      }).catch(() => null).finally(() => { queuedDecodes--; });
+      decodeQueue = decodeJob;
+      return decodeJob;
+    })().catch(() => null).finally(() => {
       pendingStillBytes -= stillSize;
       jobs.delete(key);
     });
     jobs.set(key, job);
-    decodeQueue = job;
     return job;
   }
 
@@ -497,11 +557,13 @@ function mediaHandler(service) {
     finally { importRequests--; }
   };
   serve.thumbnailStatus = disk.status;
+  serve.rememberImportedThumbnail = rememberImportedThumbnail;
   serve.clearThumbnails = () => {
     if (clearing) return clearing;
     generation++;
     cache.clear();
-    importCache.clear();
+    importCache = new Map();
+    committedImports.clear();
     clearing = disk.clear().finally(() => { clearing = null; });
     return clearing;
   };

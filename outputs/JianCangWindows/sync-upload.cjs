@@ -78,7 +78,7 @@ async function ensureChild(parent, identity, name) {
 
 function validSize(byteCount) { return Number.isSafeInteger(byteCount) && byteCount >= 0 && byteCount <= maxBlobBytes; }
 
-async function transfer(source, output, report) {
+async function transfer(source, output, report, onStableSource) {
   const before = await source.stat({ bigint: true });
   const byteCount = Number(before.size);
   if (!before.isFile() || !validSize(byteCount)) throw errorWith('无法读取原件，单个文件上限为 16 GB。', 'INVALID_ORIGINAL');
@@ -108,11 +108,12 @@ async function transfer(source, output, report) {
     throw errorWith('读取时原件发生变化，请重新导入。', 'SOURCE_CHANGED');
   }
   if (output) await output.sync();
+  onStableSource?.(stamp(before));
   report?.(1);
   return { sha256: digest.digest('hex'), byteCount };
 }
 
-async function prepareSyncOriginal({ directory, open, bytes, fileExtension = '', onProgress } = {}) {
+async function prepareSyncOriginal({ directory, open, bytes, fileExtension = '', onProgress, captureThumbnailProof } = {}) {
   const fromFile = typeof open === 'function' && bytes === undefined;
   const fromBytes = open === undefined && bytes instanceof Uint8Array;
   if (typeof directory !== 'string' || !path.isAbsolute(directory) || typeof fileExtension !== 'string' ||
@@ -130,6 +131,7 @@ async function prepareSyncOriginal({ directory, open, bytes, fileExtension = '',
   let completed = false;
   let source;
   let target;
+  let sourceStamp;
   async function discard() {
     await validateDirectory(root, identity);
     await fs.rm(file, { force: true });
@@ -140,7 +142,7 @@ async function prepareSyncOriginal({ directory, open, bytes, fileExtension = '',
     let blob;
     if (fromFile) {
       source = await open();
-      blob = await transfer(source, target, onProgress);
+      blob = await transfer(source, target, onProgress, captureThumbnailProof ? value => { sourceStamp = value; } : undefined);
     } else {
       if (!validSize(bytes.byteLength)) throw errorWith('单个文件上限为 16 GB。', 'INVALID_ORIGINAL');
       // Own the bytes until the write and its digest have completed.
@@ -155,7 +157,7 @@ async function prepareSyncOriginal({ directory, open, bytes, fileExtension = '',
     target = null;
     await validateDirectory(root, identity);
     completed = true;
-    return { blob, fileExtension, file, discard, width, height };
+    return { blob, fileExtension, file, discard, width, height, ...(sourceStamp && { sourceStamp }) };
   } finally {
     await source?.close();
     await target?.close();

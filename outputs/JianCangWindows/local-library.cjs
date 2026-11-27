@@ -1028,7 +1028,7 @@ async function writeOriginal(target, input, linkContent, probe) {
     await targetHandle.close();
     targetHandle = null;
     if (!source || byteCount === 0 || reported < 1) report?.(1);
-    return { byteCount, dimensions };
+    return { byteCount, dimensions, ...(input.captureThumbnailProof && before && { sourceStamp: sourceStamp(before) }) };
   } finally {
     await targetHandle?.close();
     await source?.close();
@@ -1078,18 +1078,22 @@ function importLocalAsset(root, input) {
     let published;
     let committed = false;
     try {
-      const { byteCount, dimensions } = await writeOriginal(temporary, input, linkContent, probe);
+      const { byteCount, dimensions, sourceStamp: copiedStamp } = await writeOriginal(temporary, input, linkContent, probe);
       if (await directoryIdentity(root) !== identity || await directoryIdentity(originalRoot) !== originalIdentity) throw invalidLibrary();
       const written = await fs.lstat(temporary, { bigint: true });
       await fs.rename(temporary, target);
       published = written;
+      const destination = copiedStamp ? await fs.lstat(target, { bigint: true }).catch(() => null) : null;
+      const thumbnailProof = destination?.isFile() && !destination.isSymbolicLink() && destination.dev === written.dev &&
+        destination.ino === written.ino && destination.size === written.size && destination.mtimeNs === written.mtimeNs
+        ? { sourceStamp: copiedStamp, destinationStamp: sourceStamp(destination), mediaRevision: mediaStamp(destination) } : null;
       manifest.assets[id] = { ...asset, byteCount, width: dimension(input.width) || dimension(dimensions[0]), height: dimension(input.height) || dimension(dimensions[1]) };
       changes.imported.push(id);
       const expired = [];
       recordUndo(manifest, changes, expired);
       await commit(root, identity, manifest, expired);
       committed = true;
-      return { id, revision: String(manifest.revision), existing: false };
+      return { id, revision: String(manifest.revision), existing: false, ...(thumbnailProof && { thumbnailProof }) };
     } finally {
       if (await directoryIdentity(originalRoot).catch(() => null) === originalIdentity) {
         await fs.rm(temporary, { force: true }).catch(() => {});

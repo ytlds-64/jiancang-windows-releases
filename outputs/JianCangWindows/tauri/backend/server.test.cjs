@@ -18,9 +18,9 @@ const iconDirectory = Buffer.from('00000100010001010000010020000000000016000000'
 iconDirectory.writeUInt32LE(png.length, 14);
 const ico = Buffer.concat([iconDirectory, png]);
 
-async function start(profile) {
+async function start(profile, env = process.env) {
   const processHandle = spawn(process.execPath, [path.join(__dirname, 'server.cjs'), profile], {
-    stdio: ['pipe', 'pipe', 'pipe'],
+    env, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const output = readline.createInterface({ input: processHandle.stdout });
   const stopped = once(processHandle, 'exit');
@@ -205,6 +205,82 @@ test('the Tauri bridge scopes studio records to the selected format-6 sync libra
   const placeholder = path.join(base, `.${randomUUID()}.${randomUUID()}.json.icloud`);
   await fs.writeFile(placeholder, '');
   assert.match((await backend.request('studio:list', registration, 'video-note', scope)).error, /仍在同步/);
+});
+
+test('committed imports reuse an exact rendered poster, and skip changed originals and sync duplicates', {
+  timeout: 25_000, skip: process.platform === 'win32' || !process.env.JIANCANG_FFMPEG_PATH || !process.env.JIANCANG_QA_VIDEO,
+}, async t => {
+  const temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'jiancang-reuse-poster-')));
+  const profile = path.join(temp, 'profile');
+  const ffmpeg = path.join(temp, 'ffmpeg');
+  const disabled = path.join(temp, 'decoder-disabled');
+  const quote = value => `'${value.replaceAll("'", "'\"'\"'")}'`;
+  const commandText = `#!/bin/sh\nif [ -f ${quote(disabled)} ]; then exit 77; fi\nexec ${quote(process.env.JIANCANG_FFMPEG_PATH)} "$@"\n`;
+  let backend;
+  t.after(async () => {
+    try { await backend?.close(); } finally { await fs.rm(temp, { recursive: true, force: true }); }
+  });
+  await fs.writeFile(ffmpeg, commandText, { mode: 0o700 });
+  const clip = path.join(temp, '导入的视频.mp4');
+  const video = await fs.readFile(process.env.JIANCANG_QA_VIDEO);
+  await fs.writeFile(clip, video);
+  backend = await start(profile, { ...process.env, JIANCANG_FFMPEG_PATH: ffmpeg });
+  const { command, media } = backend;
+  const local = (await command('local:create', '本地封面库', temp)).activeLibraryId;
+  const localRoot = await command('library:reveal-path', local);
+  const syncRoot = path.join(temp, 'sync');
+  await syncFixture(syncRoot, png, 'png', { format: 6 });
+  const sync = (await command('library:choose', 'jiancang', syncRoot)).activeLibraryId;
+  await command('sync:configure-write', sync, true);
+
+  async function staged(library) {
+    await fs.rm(disabled, { force: true });
+    await command('local-import:set-paused', library, true);
+    const { tasks: [task] } = await command('local-import:choose', library, null, [clip]);
+    const preview = await media('import-thumbnail', library, task.id);
+    assert.equal(preview.status, 200);
+    assert.equal(preview.headers.get('content-type'), 'image/jpeg');
+    return { task, bytes: Buffer.from(await preview.arrayBuffer()) };
+  }
+
+  async function finish(library, task) {
+    await fs.writeFile(disabled, '');
+    await command('local-import:set-paused', library, false);
+    return waitFor(async () => {
+      const queue = await command('local-import:list', library);
+      const complete = queue.tasks.find(item => item.id === task.id && item.status === 'done');
+      if (!complete?.resultId) return null;
+      const state = await command('library:state');
+      const catalog = state.catalogs.find(item => item.libraryId === library);
+      return catalog?.library.assets.find(asset => asset.id === complete.resultId && asset.available);
+    });
+  }
+
+  for (const library of [local, sync]) {
+    const { task, bytes } = await staged(library);
+    const asset = await finish(library, task);
+    assert.equal((await media('import-thumbnail', library, task.id)).status, 404);
+    const poster = await media('thumbnail', library, asset.id);
+    assert.equal(poster.status, 200, `Expected a reused poster with the decoder disabled for ${library}`);
+    assert.deepEqual(Buffer.from(await poster.arrayBuffer()), bytes);
+  }
+  await command('storage:clear-thumbnails');
+  const duplicate = await staged(sync);
+  const existing = await finish(sync, duplicate.task);
+  assert.equal((await media('thumbnail', sync, existing.id)).status, 404, 'A sync duplicate must not seed a poster');
+
+  const corrupt = Buffer.alloc(video.length, 1);
+  const changedSource = await staged(local);
+  await fs.writeFile(clip, corrupt);
+  const changed = await finish(local, changedSource.task);
+  assert.equal((await media('thumbnail', local, changed.id)).status, 404);
+
+  await fs.writeFile(clip, video);
+  const changedTarget = await staged(local);
+  const written = await finish(local, changedTarget.task);
+  await fs.writeFile(path.join(localRoot, 'originals', `${written.id}.mp4`), corrupt);
+  await command('library:refresh', local);
+  assert.equal((await media('thumbnail', local, written.id)).status, 404);
 });
 
 test('stock Node private bridge manages local libraries and reads Eagle and verified iCloud assets', { timeout: 25_000 }, async () => {

@@ -108,6 +108,7 @@ async function start(profile, version, installed, downloads) {
   const transfer = new TransferService(service, downloads);
   const offline = new OfflineService(service, { production });
   const serveMedia = mediaHandler(service);
+  service.onImportedThumbnail = serveMedia.rememberImportedThumbnail;
   const cloudRevisions = new Map();
   let cloudRevision = 0;
   const cloud = new CloudService(service, { thumbnailCache: serveMedia,

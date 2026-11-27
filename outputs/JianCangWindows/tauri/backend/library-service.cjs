@@ -789,8 +789,13 @@ class LibraryService {
   async commitImport(entry, task, fields, { queued = false } = {}) {
     const input = { ...fields, jobId: entry.kind === 'local' ? task.id : syncUploadId(task.id),
       expectedLibraryId: entry.libraryId, undoGroup: task.batchId,
-      collectionIds: task.collectionId ? [task.collectionId] : [], collectionParentId: task.collectionId };
-    const result = await (entry.kind === 'local' ? importLocalAsset(entry.root, input) : this.syncWriter.upload(entry, input));
+      collectionIds: task.collectionId ? [task.collectionId] : [], collectionParentId: task.collectionId,
+      captureThumbnailProof: queued && typeof fields.open === 'function' && Boolean(this.onImportedThumbnail) };
+    const { thumbnailProof, ...result } = await (entry.kind === 'local' ? importLocalAsset(entry.root, input) : this.syncWriter.upload(entry, input));
+    if (thumbnailProof && !result.existing && !result.pending) {
+      this.onImportedThumbnail?.({ ...thumbnailProof, provisionalId: task.assetId, id: result.id,
+        registrationId: entry.id, root: entry.root, libraryId: entry.libraryId });
+    }
     if (queued) await this.refreshImportedEntry(entry, task.batchId);
     else await this.refreshEntry(entry);
     return result;

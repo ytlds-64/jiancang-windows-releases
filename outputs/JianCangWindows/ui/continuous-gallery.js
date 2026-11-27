@@ -329,6 +329,37 @@
       else if (nextWidth > 0) schedule();
     }).observe(scroller);
 
+    function nearestAcrossMasonry(tile, step) {
+      const center = (tile.y + tile.bottom) / 2;
+      for (let column = tile.column + step; layout.lanes[column]; column += step) {
+        const lane = layout.lanes[column];
+        let chosen = null;
+        let best = Infinity;
+        for (let index = firstRowAt(lane, tile.y); lane[index] && lane[index].y <= tile.bottom; index++) {
+          const candidate = lane[index];
+          if (candidate.asset.importing) continue;
+          const distance = Math.max(0, candidate.y - center, center - candidate.bottom);
+          if (distance < best) { chosen = candidate; best = distance; }
+        }
+        if (chosen) return chosen.asset.id;
+      }
+
+      // No card alongside the current one. Continue from the opposite edge
+      // just below (right) or above (left) its top, allowing for subpixel ties.
+      const boundary = tile.y + step;
+      const firstColumn = step > 0 ? 0 : layout.lanes.length - 1;
+      for (let column = firstColumn; layout.lanes[column]; column += step) {
+        const lane = layout.lanes[column];
+        let start = firstRowAt(lane, boundary);
+        if (step > 0 && lane[start]?.y <= boundary) start++;
+        else if (step < 0 && (lane[start]?.y ?? Infinity) >= boundary) start--;
+        for (let index = start; lane[index]; index += step) {
+          if (!lane[index].asset.importing) return lane[index].asset.id;
+        }
+      }
+      return null;
+    }
+
     function nearest(id, key) {
       const tile = layout.tiles.get(id);
       if (!tile || tile.asset.importing) return null;
@@ -341,10 +372,9 @@
         const offsets = { ArrowUp: -1, ArrowDown: 1, PageUp: -step, PageDown: step };
         return Object.hasOwn(offsets, key) ? assets[bound(tile.index + offsets[key], first, assets.length - 1)]?.id ?? null : null;
       }
-      // Left and right follow the visible sort order, even when a row ends
-      // or the next masonry card is placed in a different column.
       if (key === 'ArrowLeft' || key === 'ArrowRight') {
         const offset = key === 'ArrowLeft' ? -1 : 1;
+        if (tile.column !== undefined) return nearestAcrossMasonry(tile, offset);
         for (let index = tile.index + offset; assets[index]; index += offset) {
           if (!assets[index].importing) return assets[index].id;
         }

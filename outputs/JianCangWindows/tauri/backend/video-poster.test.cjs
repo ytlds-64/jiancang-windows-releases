@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
+const { setTimeout: delay } = require('node:timers/promises');
 const { folderIdentity } = require('../../library-watcher.cjs');
 const { canGenerateThumbnail, mediaHandler } = require('./media.cjs');
 
@@ -46,7 +47,7 @@ async function posterFixture(t, blackFrames, redFrame, duration) {
       open: () => fs.open(file, 'r') }),
   };
   const handler = mediaHandler(service);
-  async function thumbnail(serve = handler, pending = false) {
+  async function thumbnail(serve = handler, pending = false, id = asset.id) {
     let status, headers, bytes;
     const response = {
       writeHead(code, values) { status = code; headers = values; },
@@ -54,12 +55,12 @@ async function posterFixture(t, blackFrames, redFrame, duration) {
     };
     const request = { headers: {}, method: 'GET' };
     if (pending) await serve.importThumbnail(request, response, 'local', 'pending', signal);
-    else await serve(request, response, 'thumbnail', 'local', asset.id, signal);
+    else await serve(request, response, 'thumbnail', 'local', id, signal);
     assert.equal(status, 200);
     assert.equal(headers['Content-Type'], 'image/jpeg');
     return bytes;
   }
-  return { thumbnail, cachedThumbnail: () => thumbnail(mediaHandler({ ...service, ffmpeg: path.join(temp, 'no-decoder') })),
+  return { service, thumbnail, cachedThumbnail: () => thumbnail(mediaHandler({ ...service, ffmpeg: path.join(temp, 'no-decoder') })),
     pendingThumbnail: () => thumbnail(handler, true) };
 }
 
@@ -93,4 +94,30 @@ test('missing catalog duration and pending imports both use the midpoint from th
   const { thumbnail, pendingThumbnail } = await posterFixture(t, [0], 60, null);
   assertPosterColor(await thumbnail(), 'red');
   assertPosterColor(await pendingThumbnail(), 'red');
+});
+
+test('a disk poster is returned while a different original is still waiting to decode', { skip: !ffmpeg }, async t => {
+  const { service, thumbnail } = await posterFixture(t, [], 0, 10);
+  const cached = await thumbnail();
+  const original = service.asset();
+  const fresh = mediaHandler({ ...service, asset: id => ({ ...original, asset: { ...original.asset, id } }) });
+  const opened = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  const lstat = fs.lstat;
+  t.mock.method(fs, 'lstat', async (file, options) => {
+    if (file === original.file) {
+      opened.resolve();
+      await resume.promise;
+    }
+    return lstat(file, options);
+  });
+  const cold = thumbnail(fresh, false, 'uncached');
+  const deadline = delay(4000, null, { ref: false }).then(() => assert.fail('the disk poster waited for the decoder'));
+  try {
+    await Promise.race([opened.promise, cold.then(() => assert.fail('the cold request did not reach the decoder')), deadline]);
+    assert.deepEqual(await Promise.race([thumbnail(fresh), deadline]), cached);
+  } finally {
+    resume.resolve();
+    await cold;
+  }
 });
